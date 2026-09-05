@@ -9,10 +9,10 @@ API ：/api/analyze、/api/interviews、/api/qa/*、merge/confirm 等
 """
 from __future__ import annotations
 
-import json
+import re
+from urllib.parse import quote
 
-from flask import (Flask, Response, abort, jsonify, redirect, render_template,
-                   request, url_for)
+from flask import (Flask, Response, abort, jsonify, render_template, request)
 
 from . import exporter, repository, service
 from .config import ensure_dirs, extractor_label, extractor_mode
@@ -129,20 +129,58 @@ def page_export_bank():
 
 # ---------- 导出下载 ----------
 
+# Bug 修复（见 docs/bug_fix.md）：Content-Disposition 必须可被 latin-1 编码，
+# 中文文件名不能直接进响应头（Werkzeug ≥3.1 序列化时抛错，导致连接挂起 0 字节）。
+# 方案：RFC 6266 —— filename= 放 ASCII 回退名；filename*=UTF-8'' 放百分号编码的真实名。
+
+_ILLEGAL_FN_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_NON_ASCII = re.compile(r"[^\x20-\x7e]+")
+_MAX_FN_LEN = 150
+
+
+def _sanitize_filename(name: str, fallback: str) -> str:
+    """清理为合法下载文件名：换行/控制/非法字符替换，去头尾点与空格，截断过长。"""
+    name = (name or "").strip().replace("\r", " ").replace("\n", " ")
+    name = _ILLEGAL_FN_CHARS.sub("_", name)
+    name = re.sub(r"\s+", " ", name).strip(" .")
+    name = name[:_MAX_FN_LEN].strip(" .")
+    return name or fallback
+
+
+def _content_disposition(utf8_name: str, ascii_fallback: str) -> str:
+    """生成 latin-1 安全的 Content-Disposition（RFC 6266 + RFC 5987）。
+
+    - 文件名本身全 ASCII → filename= 直接用（保持友好可读）；
+    - 含非 ASCII（中文等）→ filename= 用 ASCII 回退名，真实名走 filename*=UTF-8''。
+    """
+    real = _sanitize_filename(utf8_name, ascii_fallback)
+    try:
+        real.encode("ascii")
+        filename_part = real
+    except UnicodeEncodeError:
+        filename_part = ascii_fallback
+    return f'attachment; filename="{filename_part}"; filename*=UTF-8\'\'{quote(real, safe="")}'
+
+
+def _download_md(md: str, utf8_name: str, ascii_fallback: str) -> Response:
+    # Werkzeug 对 text/* 且未带 charset 的 mimetype 会自动补 charset=utf-8，
+    # 因此这里只传 mimetype，避免出现重复的 charset 参数。
+    return Response(md, mimetype="text/markdown",
+                    headers={"Content-Disposition": _content_disposition(utf8_name, ascii_fallback)})
+
+
 @app.route("/download/interviews/<iid>.md")
 def download_interview_md(iid: str):
     iv = repository.get_interview(iid)
+    if not iv:
+        abort(404)  # 顺带修复：不存在的 id 不再触发 500
     md = exporter.interview_to_md(iid)
-    fname = f"面试复盘-{(iv['title'] if iv else iid)}.md".replace("/", "_")
-    return Response(md, mimetype="text/markdown; charset=utf-8",
-                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+    return _download_md(md, f"面试复盘-{iv['title']}.md", f"review_{iid}.md")
 
 
 @app.route("/download/bank.md")
 def download_bank_md():
-    md = exporter.bank_to_md()
-    return Response(md, mimetype="text/markdown; charset=utf-8",
-                    headers={"Content-Disposition": 'attachment; filename="面经库快照.md"'})
+    return _download_md(exporter.bank_to_md(), "面经库快照.md", "bank_snapshot.md")
 
 
 # ---------- API ----------
