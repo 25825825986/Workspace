@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}AI_Review · AI 面试复盘{% endblock %}</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="wrap">
+    <a class="brand" href="/">AI_Review</a>
+    <nav>
+      <a href="/" class="{{ 'active' if nav=='index.html' else '' }}">工作台</a>
+      <a href="/import" class="{{ 'active' if nav=='import.html' else '' }}">导入复盘</a>
+      <a href="/bank" class="{{ 'active' if nav=='bank.html' else '' }}">面经库</a>
+    </nav>
+    <span class="extractor-badge">解析：{{ extractor_label }}</span>
+  </div>
+</header>
+
+{% set _ok = request.args.get('ok') %}
+{% set _err = request.args.get('err') %}
+{% if _ok %}<div class="flash ok wrap">{{ _ok }}</div>{% endif %}
+{% if _err %}<div class="flash err wrap">{{ _err }}</div>{% endif %}
+
+<main class="wrap">
+{% block content %}{% endblock %}
+</main>
+<footer class="wrap foot">AI_Review · 本地运行 · 数据保存在项目 data/ 目录</footer>
+<script src="/static/app.js"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

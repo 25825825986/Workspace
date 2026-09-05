@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <div class="between">
+    <div>
+      <h2>面经库（跨场累积）</h2>
+      <p class="muted">按知识点去重合并（R3）：共 {{ stats.entries }} 个条目 · 覆盖 {{ stats.categories }} 个知识点 ·
+        累计提问 {{ stats.total_ask }} 次 · {{ stats.interviews }} 场面试</p>
+    </div>
+    <div class="ops">
+      <a class="btn" href="/bank/export">导出预览</a>
+      <a class="btn primary" href="/download/bank.md">下载快照 .md</a>
+    </div>
+  </div>
+</section>
+
+{% if groups %}
+{% for g in groups %}
+<section class="card">
+  <h3>{{ g.category }}
+    <span class="muted small">（知识点累计被问 {{ g.total_ask }} 次 · {{ g.entry_count }} 种问法 · 覆盖 {{ g.interviews }} 场面试）</span>
+  </h3>
+  {% for e in g.entries %}
+  <div class="entry">
+    <div class="between">
+      <b>{{ e.head_question }}</b>
+      <span class="muted small">同问法累计 {{ e.ask_times }} 次 · 最近 {{ e.last_asked_at or '-' }} · 出处 {{ e.source_interview_count }} 场
+        {% if e.question_variants %}· 变体 {{ e.question_variants|length }}{% endif %}</span>
+    </div>
+    {% if e.question_variants %}
+    <p class="muted small">变体：{{ e.question_variants[:4] | join(' ｜ ') }}{% if e.question_variants|length > 4 %} …{% endif %}</p>
+    {% endif %}
+    <div class="duo-mini">
+      <div class="b-col">
+        <p class="tagline">忠实核心答案（原文，只读）</p>
+        <p class="verbatim small">{{ e.core_extract or '（暂无——请先在某场复盘中确认并入库）' }}</p>
+      </div>
+      <div class="b-col">
+        <p class="tagline">优化建议（独立）</p>
+        <p class="small">{{ e.optimization or '（未填写——可在单题复盘的"优化建议"栏补充）' }}</p>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</section>
+{% endfor %}
+{% else %}
+<section class="card"><p class="empty">面经库为空：在「问答列表」中对题目点"确认"后执行「入库 / 整场入库」即可累积。</p></section>
+{% endif %}
+{% endblock %}

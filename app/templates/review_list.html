@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block content %}
+<nav class="crumbs"><a href="/">工作台</a> / 本场复盘</nav>
+
+<section class="card">
+  <div class="between">
+    <div>
+      <h2>{{ iv.title }}</h2>
+      <p class="muted">
+        {{ interview_types.get(iv.interview_type, iv.interview_type) }} ·
+        {{ iv.date or '未填日期' }} ·
+        文本格式：{{ fmt_label }} ·
+        解析器：{{ iv.parser_version or '-' }}
+      </p>
+      <p>
+        {% for sp in iv.speaker_map %}
+        <span class="chip">{{ sp.label }} → {{ '面试官' if sp.role=='interviewer' else ('我(回答)' if sp.role=='self' else ('其他' if sp.role=='other' else '待定')) }}
+          {% if sp.source=='inferred' %}<i class="muted">(推断)</i>{% endif %}</span>
+        {% endfor %}
+      </p>
+    </div>
+    <div class="ops">
+      <span class="chip s-review">共 {{ qas|length }} 题{% if pending %} · {{ pending }} 待确认{% endif %}</span>
+      <button class="btn" data-post="/api/interviews/{{ iv.id }}/confirm-all">全部确认</button>
+      <button class="btn" data-post="/api/interviews/{{ iv.id }}/merge-all">整场入库面经库</button>
+      <a class="btn" href="/interviews/{{ iv.id }}/export">导出预览</a>
+      <a class="btn primary" href="/download/interviews/{{ iv.id }}.md">下载 .md</a>
+    </div>
+  </div>
+</section>
+
+{% if qas %}
+<section class="card">
+  <table class="tbl">
+    <thead><tr><th>#</th><th>状态</th><th>知识点</th><th>问题（忠实原文）</th><th>回答摘录</th><th>操作</th></tr></thead>
+    <tbody>
+    {% for q in qas %}
+      <tr>
+        <td>{{ q.seq }}</td>
+        <td>
+          <span class="chip {{ 's-pending' if q.status in ('auto','pending') else 's-confirmed' }}">
+            {{ status_label.get(q.status, q.status) }}</span>
+          {% if q.entry_id %}<span class="chip">已入库</span>{% endif %}
+        </td>
+        <td>{{ q.category_name or '未分类' }}</td>
+        <td>
+          <a href="/interviews/{{ iv.id }}/qa/{{ q.id }}">{{ q.q_text }}</a>
+          {% if q.q_is_corrected %}<span class="chip">问题已修正</span>{% endif %}
+        </td>
+        <td class="small muted">
+          {% set ns = namespace(a1 = q.answers[0] if q.answers else None) %}
+          {% if ns.a1 %}{{ (ns.a1.corrected_text if ns.a1.is_corrected else ns.a1.extract_text) | truncate(60) }}{% else %}-{% endif %}
+        </td>
+        <td class="ops">
+          <a class="btn small" href="/interviews/{{ iv.id }}/qa/{{ q.id }}">复盘</a>
+          {% if not q.entry_id %}
+            {% if q.status in ('auto','pending') %}
+            <button class="btn small" data-post="/api/qa/{{ q.id }}/confirm">确认</button>
+            {% else %}
+            <button class="btn small" data-post="/api/qa/{{ q.id }}/merge">入库</button>
+            {% endif %}
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% else %}
+<section class="card"><p class="empty">本场未提取到问答。可能原因：角色未指定正确、文本过短或格式特殊。返回导入页重新导入。</p></section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.querySelectorAll('[data-post]').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    try {
+      const r = await fetch(btn.dataset.post, {method:'POST'});
+      const d = await r.json();
+      if(!r.ok) { alert(d.error || '操作失败'); btn.disabled = false; return; }
+      location.reload();
+    } catch(e){ alert('网络错误：' + e.message); btn.disabled = false; }
+  });
+});
+</script>
+{% endblock %}

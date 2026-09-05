@@ -1,0 +1,5 @@
+# AI_Review 依赖（Phase 3 按 Flask 落地，见 docs/03 §1.1）
+flask>=3.0
+python-dotenv>=1.0
+# AI 提取模式才需要（OpenAI 兼容 SDK）；不填 DEEPSEEK_API_KEY 时用内置规则/mock
+openai>=1.30

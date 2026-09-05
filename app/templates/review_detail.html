@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block content %}
+<nav class="crumbs"><a href="/interviews/{{ iv.id }}">← 返回问答列表</a> ｜ 第 {{ pos + 1 }} / {{ all_qas|length }} 题</nav>
+
+<section class="card">
+  <div class="between">
+    <h2>#{{ qa.seq }} 单题复盘</h2>
+    <div class="ops">
+      <span class="chip {{ 's-pending' if qa.status in ('auto','pending') else 's-confirmed' }}">{{ status_label.get(qa.status, qa.status) }}</span>
+      <span class="chip">{{ qa.category_name or '未分类' }}</span>
+      {% if qa.entry_id %}<span class="chip">已纳入面经库</span>{% endif %}
+    </div>
+  </div>
+</section>
+
+<div class="duo">
+  <section class="card left-pane">
+    <h3>忠实原文（只读提取，R2）</h3>
+
+    <div class="qblock">
+      <p class="tagline">问题 · {{ speaker.get(qa.q_speaker_id, '未知') }}</p>
+      {% set _qt = qa.q_corrected_text if qa.q_is_corrected else qa.q_text %}
+      <p class="verbatim">{{ _qt }}</p>
+      {% if qa.q_is_corrected %}<p class="muted small">（原提取：{{ qa.q_text }}）</p>{% endif %}
+      <blockquote class="quote">
+        {% if qa.q_source_ref and qa.q_source_ref.quote %}{{ qa.q_source_ref.quote }}{% else %}（原文区间缺失）{% endif %}
+        {% if qa.q_source_ref %}<span class="muted small"> [字符区间 {{ qa.q_source_ref.start }}-{{ qa.q_source_ref.end }}]</span>{% endif %}
+      </blockquote>
+      <details class="fixer"><summary>问题提取有误？标记修正</summary>
+        <textarea id="fix-q" rows="2" placeholder="粘贴修正后的问题文本（忠实原文层面修正，非润色）">{{ qa.q_corrected_text or qa.q_text }}</textarea>
+        <button class="btn small" id="fix-q-btn">保存问题修正</button>
+      </details>
+    </div>
+
+    {% for a in qa.answers %}
+    <div class="ablock">
+      <p class="tagline">回答 {{ loop.index }} · {{ speaker.get(a.speaker_id, '未知') }}
+        {% if a.is_corrected %}<span class="chip">已修正</span>{% endif %}</p>
+      <p class="verbatim">{{ a.corrected_text if a.is_corrected else a.extract_text }}</p>
+      {% if a.is_corrected %}<p class="muted small">（原始忠实提取：{{ a.extract_text }}）</p>{% endif %}
+      <blockquote class="quote">
+        {% if a.source_ref and a.source_ref.quote %}{{ a.source_ref.quote }}{% else %}<span class="warn-text">原文引用缺失——该段未与原文对齐，请核对或修正</span>{% endif %}
+        {% if a.source_ref %}<span class="muted small"> [字符区间 {{ a.source_ref.start }}-{{ a.source_ref.end }}]</span>{% endif %}
+      </blockquote>
+      <details class="fixer"><summary>这段回答提取有误？标记修正</summary>
+        <textarea data-fix-ans data-idx="{{ loop.index0 }}" rows="3"
+          placeholder="粘贴修正后的回答文本（修正提取错误，不用于润色改写）">{{ a.corrected_text or '' }}</textarea>
+        <button class="btn small" data-fix-ans-btn data-idx="{{ loop.index0 }}">保存回答修正</button>
+      </details>
+    </div>
+    {% else %}
+    <p class="muted">（无回答内容）</p>
+    {% endfor %}
+  </section>
+
+  <section class="card right-pane">
+    <h3>优化建议（独立栏）＋ 批注</h3>
+    <p class="muted small">优化建议与批注只影响"下次怎么更好"，永不改写上方原文。</p>
+    <label>优化建议
+      <textarea id="edit-optimization" rows="5" placeholder="如：先给结论再展开；补充具体数据/例子；注意开头避免卡壳…">{{ qa.optimization or '' }}</textarea>
+    </label>
+    <label>批注
+      <textarea id="edit-annotation" rows="3" placeholder="对本题的记录：当时的感受、要点补充、下次要看的资料…">{{ qa.annotation or '' }}</textarea>
+    </label>
+    <div class="grid2">
+      <label>状态
+        <select id="edit-status">
+          {% for k, v in status_label.items() %}
+          <option value="{{ k }}" {{ 'selected' if qa.status==k else '' }}>{{ v }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>知识点
+        <select id="edit-category">
+          {% for c in categories %}
+          <option value="{{ c.id }}" {{ 'selected' if qa.category_id==c.id else '' }}>{{ c.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <button class="btn primary" id="btn-save">保存</button>
+      {% if not qa.entry_id %}
+      <button class="btn" id="btn-merge">保存并入库面经库</button>
+      {% endif %}
+      <span class="muted" id="save-info"></span>
+    </div>
+  </section>
+</div>
+
+<nav class="pager">
+  {% if prev %}<a class="btn" href="/interviews/{{ iv.id }}/qa/{{ prev.id }}">← 上一题</a>{% else %}<span></span>{% endif %}
+  {% if next %}<a class="btn" href="/interviews/{{ iv.id }}/qa/{{ next.id }}">下一题 →</a>{% endif %}
+</nav>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const qid = '{{ qa.id }}';
+const iid = '{{ iv.id }}';
+async function post(url, payload){
+  const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(payload||{})});
+  const d = await r.json();
+  if(!r.ok) throw new Error(d.error || '保存失败');
+  return d;
+}
+async function saveAnd(merge){
+  const info = document.getElementById('save-info');
+  const payload = {
+    annotation: document.getElementById('edit-annotation').value,
+    optimization: document.getElementById('edit-optimization').value,
+    status: document.getElementById('edit-status').value,
+    category_id: document.getElementById('edit-category').value,
+  };
+  info.textContent = '保存中…';
+  try {
+    await post('/api/qa/' + qid + '/update', payload);
+    if(merge){ await post('/api/qa/' + qid + '/merge', {}); }
+    location.reload();
+  } catch(e){ info.textContent=''; alert(e.message); }
+}
+document.getElementById('btn-save').addEventListener('click', () => saveAnd(false));
+const m = document.getElementById('btn-merge');
+if(m) m.addEventListener('click', () => saveAnd(true));
+
+document.getElementById('fix-q-btn').addEventListener('click', async () => {
+  try { await post('/api/qa/' + qid + '/update', {fix_question_text: document.getElementById('fix-q').value}); location.reload(); }
+  catch(e){ alert(e.message); }
+});
+document.querySelectorAll('[data-fix-ans-btn]').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const idx = btn.dataset.idx;
+    const text = document.querySelector(`[data-fix-ans][data-idx="${idx}"]`).value;
+    try { await post('/api/qa/' + qid + '/update', {fix_answer_idx: idx, fix_answer_text: text}); location.reload(); }
+    catch(e){ alert(e.message); }
+  });
+});
+</script>
+{% endblock %}

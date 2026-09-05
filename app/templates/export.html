@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <div class="between">
+    <h2>导出预览{% if kind=='interview' and iv %}：{{ iv.title }}{% else %}：面经库快照{% endif %}</h2>
+    <div class="ops">
+      {% if kind=='interview' and iid %}
+      <a class="btn" href="/interviews/{{ iid }}">返回列表</a>
+      <a class="btn primary" href="/download/interviews/{{ iid }}.md">下载 .md</a>
+      {% else %}
+      <a class="btn" href="/bank">返回面经库</a>
+      <a class="btn primary" href="/download/bank.md">下载 .md</a>
+      {% endif %}
+    </div>
+  </div>
+  <p class="muted small">提示：需要 PDF 时，可在此页按 <kbd>Ctrl/Cmd + P</kbd> 使用浏览器打印为 PDF（零依赖方案）。</p>
+  <pre class="md-preview">{{ md }}</pre>
+</section>
+{% endblock %}
