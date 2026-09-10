@@ -1,44 +1,85 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="hero">
-  <h1>面试复盘，让每次面试都成为下一次的准备素材</h1>
-  <p>导入转写文本 → 忠实原文的问答提取 → 独立优化建议 → 跨场累积的面经库。</p>
-  <a class="btn primary big" href="/import">＋ 新建复盘</a>
+<section class="page-head">
+  <div>
+    <h1>面试记录</h1>
+    <p class="muted">每次导入的面试都会保存在这里：点开查看问答、逐题复习、导出复盘报告。</p>
+  </div>
+  <a class="btn primary" href="/import">＋ 导入面试</a>
 </section>
 
 <section class="stats-row">
   <div class="stat"><b>{{ stats.interviews }}</b><span>面试场次</span></div>
-  <div class="stat"><b>{{ stats.entries }}</b><span>面经知识点</span></div>
-  <div class="stat"><b>{{ stats.total_ask }}</b><span>累计被问次数</span></div>
-  <div class="stat"><b>{{ stats.categories }}</b><span>覆盖类别</span></div>
+  <div class="stat"><b>{{ stats.qa_total }}</b><span>累计题目</span></div>
+  <div class="stat"><b>{{ stats.qa_pending }}</b><span>待确认题目</span></div>
+  <div class="stat"><b>{{ stats.companies }}</b><span>覆盖公司</span></div>
 </section>
 
-<section class="card">
-  <h2>历史复盘</h2>
-  {% if interviews %}
-  <table class="tbl">
-    <thead><tr><th>标题</th><th>类型</th><th>日期</th><th>状态</th><th>问答/待确认</th><th>操作</th></tr></thead>
-    <tbody>
-    {% for iv in interviews %}
-      <tr>
-        <td><a href="/interviews/{{ iv.id }}">{{ iv.title }}</a></td>
-        <td>{{ interview_types.get(iv.interview_type, iv.interview_type) }}</td>
-        <td>{{ iv.date or '-' }}</td>
-        <td><span class="chip s-{{ iv.status }}">{{ status_label.get(iv.status, iv.status) }}</span></td>
-        <td>{{ iv.qa_count }}{% if iv.pending_count %} / <span class="warn-text">{{ iv.pending_count }} 待确认</span>{% endif %}</td>
-        <td class="ops">
-          <a class="btn small" href="/interviews/{{ iv.id }}">复盘</a>
-          <a class="btn small" href="/download/interviews/{{ iv.id }}.md">导出 .md</a>
-          {% if not iv.merged_count and iv.qa_count %}
-          <button class="btn small" data-post="/api/interviews/{{ iv.id }}/merge-all">整场入库</button>
-          {% endif %}
-        </td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
+<form class="toolbar card" method="get" action="/">
+  <input type="search" name="q" value="{{ search }}" placeholder="搜索标题 / 公司 / 岗位 / 地点">
+  <select name="sort" title="排序">
+    <option value="recent" {{ 'selected' if sort == 'recent' else '' }}>按最近更新</option>
+    <option value="interview_at" {{ 'selected' if sort == 'interview_at' else '' }}>按面试时间</option>
+    <option value="qa_count" {{ 'selected' if sort == 'qa_count' else '' }}>按题目数</option>
+    <option value="pending" {{ 'selected' if sort == 'pending' else '' }}>待确认优先</option>
+  </select>
+  <select name="only" title="快筛">
+    <option value="" {{ 'selected' if not only else '' }}>全部记录</option>
+    <option value="pending" {{ 'selected' if only == 'pending' else '' }}>仅有待确认</option>
+    <option value="not_merged" {{ 'selected' if only == 'not_merged' else '' }}>仅未入库</option>
+    <option value="merged" {{ 'selected' if only == 'merged' else '' }}>仅已入库</option>
+  </select>
+  <button class="btn primary" type="submit">筛选</button>
+  {% if search or only or sort != 'recent' %}<a class="btn" href="/">重置</a>{% endif %}
+</form>
+
+{% if interviews %}
+<section class="rec-list">
+  {% for iv in interviews %}
+  <article class="rec-card card">
+    <div class="between">
+      <div class="rec-main">
+        <h3 class="rec-title"><a href="/interviews/{{ iv.id }}">{{ iv.title }}</a></h3>
+        <p class="muted small rec-meta">
+          <span class="chip s-{{ iv.status }}">{{ status_label.get(iv.status, iv.status) }}</span>
+          <span class="chip">{{ interview_types.get(iv.interview_type, iv.interview_type) }}</span>
+          {% if iv.company %}<span>{{ iv.company }}</span>{% endif %}
+          {% if iv.position %}<span>· {{ iv.position }}</span>{% endif %}
+          {% if iv.location %}<span>· {{ iv.location }}</span>{% endif %}
+          {% if iv.interview_at %}<span>· {{ iv.interview_at | dt }}</span>
+          {% elif iv.date %}<span>· {{ iv.date }}</span>{% endif %}
+          {% if iv.duration_minutes %}<span>· 时长 {{ iv.duration_minutes | duration }}</span>{% endif %}
+          {% if iv.expected_salary %}<span>· 期望 {{ iv.expected_salary }}</span>{% endif %}
+        </p>
+      </div>
+      <div class="ops">
+        <a class="btn small" href="/interviews/{{ iv.id }}">查看</a>
+        <a class="btn small" href="/download/interviews/{{ iv.id }}.md">导出 .md</a>
+        {% if not iv.merged_count and iv.qa_count %}
+        <button class="btn small" data-post="/api/interviews/{{ iv.id }}/merge-all"
+                data-confirm="将本场已确认题目整场纳入知识库？（待确认题目会被跳过）">整场入库</button>
+        {% endif %}
+      </div>
+    </div>
+    <p class="rec-counts small">
+      <span>题目 <b>{{ iv.qa_count }}</b></span>
+      {% if iv.pending_count %}<span class="warn-text">待确认 <b>{{ iv.pending_count }}</b></span>{% endif %}
+      {% if iv.blank_answer_count %}<span class="warn-text">无回答 <b>{{ iv.blank_answer_count }}</b></span>{% endif %}
+      <span>已入库 <b>{{ iv.merged_count }}</b></span>
+      {% if iv.parser_version %}<span class="muted">解析器 {{ iv.parser_version }}</span>{% endif %}
+    </p>
+  </article>
+  {% endfor %}
+</section>
+{% else %}
+<section class="card empty-state">
+  {% if search or only %}
+  <p>没有匹配的面试记录。</p>
+  <a class="btn" href="/">清除筛选条件</a>
   {% else %}
-  <p class="empty">还没有复盘记录。<a href="/import">导入第一场面试转写</a>，或在导入页点「载入示例」快速体验闭环。</p>
+  <p>还没有面试记录。导入一场面试的转写文本，系统会自动整理成问答并沉淀到知识库。</p>
+  <a class="btn primary" href="/import">导入第一场面试</a>
   {% endif %}
 </section>
+{% endif %}
 {% endblock %}

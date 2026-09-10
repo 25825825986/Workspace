@@ -68,7 +68,11 @@ class RuleExtractor(BaseExtractor):
         for t in turns:
             role = role_of.get(t["label"], "unknown")
             if role == "interviewer":
-                if cur and cur["answers"]:
+                # Phase 4 修复：上一问即使没有回答也保留（连续追问/未作答不再静默丢失），
+                # 置信度降到 0.5 → 由后处理标记为 pending 供人工确认。
+                if cur is not None:
+                    if not cur["answers"]:
+                        cur["confidence"] = 0.5
                     items.append(cur)
                 cur = {"q_text": t["text"], "q_turn": t["idx"], "answers": [],
                        "category": suggest_category(t["text"]), "confidence": 0.9,
@@ -76,7 +80,9 @@ class RuleExtractor(BaseExtractor):
             elif role == "self" and cur:
                 cur["answers"].append({"text": t["text"], "turn": t["idx"]})
             # 其他/未知角色轮次：噪音，跳过
-        if cur and cur["answers"]:
+        if cur is not None:
+            if not cur["answers"]:
+                cur["confidence"] = 0.5
             items.append(cur)
         return items
 

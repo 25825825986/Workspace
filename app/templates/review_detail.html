@@ -4,10 +4,21 @@
 
 <section class="card">
   <div class="between">
-    <h2>#{{ qa.seq }} 单题复盘</h2>
+    <div>
+      <h2>#{{ qa.seq }} 单题复盘</h2>
+      <p class="muted small">
+        {{ iv.title }}
+        {% if iv.company %}· {{ iv.company }}{% endif %}
+        {% if iv.position %}· {{ iv.position }}{% endif %}
+        {% if iv.location %}· {{ iv.location }}{% endif %}
+        {% if iv.interview_at %}· {{ iv.interview_at | dt }}{% endif %}
+        {% if iv.duration_minutes %}· 时长 {{ iv.duration_minutes | duration }}{% endif %}
+      </p>
+    </div>
     <div class="ops">
       <span class="chip {{ 's-pending' if qa.status in ('auto','pending') else 's-confirmed' }}">{{ status_label.get(qa.status, qa.status) }}</span>
       <span class="chip">{{ qa.category_name or '未分类' }}</span>
+      {% if qa.direction == 'reverse' %}<span class="chip">反问环节</span>{% endif %}
       {% if qa.entry_id %}<span class="chip">已纳入面经库</span>{% endif %}
     </div>
   </div>

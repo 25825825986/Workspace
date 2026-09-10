@@ -17,7 +17,9 @@ from flask import (Flask, Response, abort, jsonify, render_template, request)
 from . import exporter, repository, service
 from .config import ensure_dirs, extractor_label, extractor_mode
 from .db import init_db
-from .service import ROLE_LABEL, UsageError
+from .migrations import run_migrations
+from .pipeline.llm import LLMError
+from .service import ROLE_LABEL, DuplicateImportError, UsageError
 
 app = Flask(__name__)
 app.json.ensure_ascii = False  # API 返回原生 UTF-8（中文可读）
@@ -27,15 +29,38 @@ INTERVIEW_TYPES = {"technical": "技术面", "behavior": "行为面", "hr": "HR�
 STATUS_LABEL = {"auto": "机器初提", "pending": "待确认", "confirmed": "已确认",
                 "corrected": "已修正"}
 
-# 首次启动准备目录与数据库（幂等）
+# 首次启动：准备目录 + 建表 + 幂等增量迁移（Phase 4）
 ensure_dirs()
 init_db()
+run_migrations()
 
 
 @app.context_processor
 def _inject_globals():
     return {"extractor_label": extractor_label(), "extractor_mode": extractor_mode(),
             "interview_types": INTERVIEW_TYPES, "status_label": STATUS_LABEL}
+
+
+@app.template_filter("duration")
+def _fmt_duration(minutes):
+    """58 → 58 分钟；90 → 1 小时 30 分（Phase 4 时长展示）。"""
+    if not minutes:
+        return ""
+    m = int(minutes)
+    h, mm = divmod(m, 60)
+    if h and mm:
+        return f"{h} 小时 {mm} 分"
+    if h:
+        return f"{h} 小时"
+    return f"{mm} 分钟"
+
+
+@app.template_filter("dt")
+def _fmt_dt(value):
+    """2024-05-20T14:30 → 2024-05-20 14:30。"""
+    if not value:
+        return ""
+    return str(value).replace("T", " ")[:16]
 
 
 @app.errorhandler(404)
@@ -52,8 +77,18 @@ def _speaker_map_of(iv: dict) -> dict:
 
 @app.route("/")
 def page_index():
-    return render_template("index.html", interviews=repository.list_interviews(),
-                           stats=repository.entry_stats())
+    """面试记录页（FR-02）：卡片式列表 + 搜索/快筛/排序 + 统计条。"""
+    search = request.args.get("q") or ""
+    sort = request.args.get("sort") or "recent"
+    only = request.args.get("only") or ""
+    if sort not in ("recent", "interview_at", "qa_count", "pending"):
+        sort = "recent"
+    if only not in ("pending", "merged", "not_merged"):
+        only = ""
+    return render_template("index.html",
+                           interviews=repository.list_interviews(search=search, sort=sort, only=only),
+                           stats=repository.dashboard_stats(),
+                           search=search, sort=sort, only=only)
 
 
 @app.route("/import")
@@ -118,13 +153,16 @@ def page_export_interview(iid: str):
     iv = repository.get_interview(iid)
     if not iv:
         abort(404)
-    return render_template("export.html", md=exporter.interview_to_md(iid),
-                           kind="interview", iid=iid, iv=iv)
+    md = exporter.interview_to_md(iid)
+    exporter.save_export(f"面试复盘-{iv['title']}-{iid}.md", md)
+    return render_template("export.html", md=md, kind="interview", iid=iid, iv=iv)
 
 
 @app.route("/bank/export")
 def page_export_bank():
-    return render_template("export.html", md=exporter.bank_to_md(), kind="bank")
+    md = exporter.bank_to_md()
+    exporter.save_export("面经库快照.md", md)
+    return render_template("export.html", md=md, kind="bank")
 
 
 # ---------- 导出下载 ----------
@@ -175,12 +213,15 @@ def download_interview_md(iid: str):
     if not iv:
         abort(404)  # 顺带修复：不存在的 id 不再触发 500
     md = exporter.interview_to_md(iid)
+    exporter.save_export(f"面试复盘-{iv['title']}-{iid}.md", md)
     return _download_md(md, f"面试复盘-{iv['title']}.md", f"review_{iid}.md")
 
 
 @app.route("/download/bank.md")
 def download_bank_md():
-    return _download_md(exporter.bank_to_md(), "面经库快照.md", "bank_snapshot.md")
+    md = exporter.bank_to_md()
+    exporter.save_export("面经库快照.md", md)
+    return _download_md(md, "面经库快照.md", "bank_snapshot.md")
 
 
 # ---------- API ----------
@@ -194,14 +235,25 @@ def api_analyze():
         return jsonify({"error": str(e)}), 400
 
 
+@app.route("/api/title-preview", methods=["POST"])
+def api_title_preview():
+    """FR-01：导入页「按规则重算标题」。"""
+    return jsonify(service.title_preview(request.get_json(silent=True) or {}))
+
+
 @app.route("/api/interviews", methods=["POST"])
 def api_create_interview():
     data = request.get_json(silent=True) or {}
     try:
         return jsonify(service.run_import(data))
+    except DuplicateImportError as e:
+        # 409：由前端弹出确认，用户可选「仍然导入」(force=True)
+        return jsonify({"error": str(e), "duplicate": True, "existing": e.existing}), 409
     except UsageError as e:
         return jsonify({"error": str(e)}), 400
-    except Exception as e:  # LLM 等不可预期错误
+    except LLMError as e:
+        return jsonify({"error": f"AI 解析失败：{e}（可改用非 AI 模式，或检查设置中的 API 配置）"}), 400
+    except Exception as e:  # 其它未预期错误
         return jsonify({"error": f"解析失败：{e}"}), 500
 
 
@@ -275,6 +327,39 @@ def api_confirm_all(iid: str):
         if q["status"] in ("auto", "pending"):
             repository.update_qa(q["id"], {"status": "confirmed"})
     return jsonify({"ok": True})
+
+
+# ---------- 校对操作（Phase 4：删除 / 合并下一条 / 拆分） ----------
+
+@app.route("/api/qa/<qid>/delete", methods=["POST"])
+def api_delete_qa(qid: str):
+    qa = repository.get_qa(qid)
+    if not qa:
+        return jsonify({"error": "问答条目不存在"}), 400
+    repository.soft_delete_qa(qid)
+    repository.renumber_seqs(qa["interview_id"])
+    return jsonify({"ok": True, "deleted": qid})
+
+
+@app.route("/api/qa/<qid>/merge-next", methods=["POST"])
+def api_merge_next_qa(qid: str):
+    try:
+        return jsonify({"ok": True, **repository.merge_with_next(qid)})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/qa/<qid>/split", methods=["POST"])
+def api_split_qa(qid: str):
+    data = request.get_json(silent=True) or {}
+    try:
+        index = int(data.get("answer_index", 1))
+    except (TypeError, ValueError):
+        return jsonify({"error": "拆分点必须是数字"}), 400
+    try:
+        return jsonify({"ok": True, **repository.split_qa(qid, index)})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
 
 
 def _merge(iid: str, qid: str | None = None) -> dict:

@@ -5,8 +5,22 @@
 """
 from __future__ import annotations
 
+import re
+
 from . import repository
+from .config import EXPORT_DIR
 from .service import ROLE_LABEL
+
+_ILLEGAL_FN = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def save_export(filename: str, md: str) -> str:
+    """把导出内容落盘到 data/export/（Phase 4：EXPORT_DIR 不再闲置，便于留档与备份）。"""
+    name = _ILLEGAL_FN.sub("_", (filename or "export.md").strip())[:150].strip(" .") or "export.md"
+    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    path = EXPORT_DIR / name
+    path.write_text(md, encoding="utf-8")
+    return str(path)
 
 
 def _speaker_display(iv: dict, sid: str | None) -> str:

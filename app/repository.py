@@ -11,6 +11,7 @@ QA_UPDATABLE = {
     "status", "annotation", "optimization", "category_id", "entry_id",
     "q_speaker_id", "q_corrected_text", "q_is_corrected",
     "q_text", "answers", "q_source_ref", "confidence", "parent_id",
+    "direction", "deleted",
 }
 
 
@@ -26,10 +27,13 @@ def create_interview(data: dict) -> str:
     with conn_ctx() as conn:
         conn.execute(
             """INSERT INTO interviews
-               (id,title,company,position,interview_type,date,raw_transcript,
+               (id,title,company,position,location,interview_at,expected_salary,
+                duration_minutes,transcript_hash,interview_type,date,raw_transcript,
                 transcript_format,status,parser_version,speaker_map,created_at,updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (iid, data["title"], data.get("company"), data.get("position"),
+             data.get("location"), data.get("interview_at"), data.get("expected_salary"),
+             data.get("duration_minutes"), data.get("transcript_hash"),
              data.get("interview_type", "mixed"), data.get("date"),
              data.get("raw_transcript", ""), data.get("transcript_format", "none"),
              data.get("status", "draft"), data.get("parser_version"),
@@ -39,9 +43,23 @@ def create_interview(data: dict) -> str:
     return iid
 
 
+def find_interview_by_hash(transcript_hash: str) -> dict | None:
+    """重复导入检测：按原文指纹找既有面试。"""
+    if not transcript_hash:
+        return None
+    with conn_ctx() as conn:
+        row = conn.execute(
+            """SELECT id, title, company, position, created_at, interview_at
+               FROM interviews WHERE transcript_hash=? ORDER BY created_at DESC LIMIT 1""",
+            (transcript_hash,)).fetchone()
+    return dict(row) if row else None
+
+
 def update_interview(iid: str, **fields: Any) -> None:
-    allowed = {"title", "company", "position", "interview_type", "date", "status",
-               "transcript_format", "parser_version", "speaker_map", "raw_transcript"}
+    allowed = {"title", "company", "position", "location", "interview_at",
+               "expected_salary", "duration_minutes", "interview_type", "date",
+               "status", "transcript_format", "parser_version", "speaker_map",
+               "raw_transcript", "transcript_hash"}
     sets = {k: v for k, v in fields.items() if k in allowed}
     if not sets:
         return
@@ -62,16 +80,63 @@ def get_interview(iid: str) -> dict | None:
     return d
 
 
-def list_interviews() -> list[dict]:
+_SORT_SQL = {
+    "recent": "i.updated_at DESC",
+    "interview_at": "COALESCE(NULLIF(i.interview_at,''), NULLIF(i.date,''), '') DESC",
+    "qa_count": "qa_count DESC, i.updated_at DESC",
+    "pending": "pending_count DESC, i.updated_at DESC",
+}
+
+_QA_ALIVE = "q.interview_id=i.id AND q.deleted=0"
+
+
+def list_interviews(search: str | None = None, sort: str = "recent",
+                    only: str | None = None) -> list[dict]:
+    """面试记录列表：支持关键词搜索、排序与快筛（Phase 4）。"""
+    sql = f"""SELECT i.*,
+                 (SELECT COUNT(*) FROM qa_items q WHERE {_QA_ALIVE}) AS qa_count,
+                 (SELECT COUNT(*) FROM qa_items q WHERE {_QA_ALIVE}
+                   AND q.status IN ('pending','auto')) AS pending_count,
+                 (SELECT COUNT(*) FROM qa_items q WHERE {_QA_ALIVE}
+                   AND q.entry_id IS NOT NULL) AS merged_count,
+                 (SELECT COUNT(*) FROM qa_items q WHERE {_QA_ALIVE}
+                   AND q.answers='[]') AS blank_answer_count
+              FROM interviews i"""
+    where: list[str] = []
+    params: list[Any] = []
+    if search and search.strip():
+        like = f"%{search.strip()}%"
+        where.append("(i.title LIKE ? OR IFNULL(i.company,'') LIKE ? "
+                     "OR IFNULL(i.position,'') LIKE ? OR IFNULL(i.location,'') LIKE ?)")
+        params += [like] * 4
+    if only == "pending":
+        where.append(f"(SELECT COUNT(*) FROM qa_items q WHERE {_QA_ALIVE} "
+                     "AND q.status IN ('pending','auto')) > 0")
+    elif only == "merged":
+        where.append(f"(SELECT COUNT(*) FROM qa_items q WHERE {_QA_ALIVE} "
+                     "AND q.entry_id IS NOT NULL) > 0")
+    elif only == "not_merged":
+        where.append(f"(SELECT COUNT(*) FROM qa_items q WHERE {_QA_ALIVE} "
+                     "AND q.entry_id IS NULL) > 0")
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY " + _SORT_SQL.get(sort, _SORT_SQL["recent"])
     with conn_ctx() as conn:
-        rows = conn.execute(
-            """SELECT i.*,
-                      (SELECT COUNT(*) FROM qa_items q WHERE q.interview_id=i.id) AS qa_count,
-                      (SELECT COUNT(*) FROM qa_items q WHERE q.interview_id=i.id
-                        AND q.status IN ('pending','auto')) AS pending_count,
-                      (SELECT COUNT(*) FROM qa_items q WHERE q.interview_id=i.id AND q.entry_id IS NOT NULL) AS merged_count
-               FROM interviews i ORDER BY i.updated_at DESC""").fetchall()
+        rows = conn.execute(sql, params).fetchall()
     return _rows_to_dicts(rows)
+
+
+def dashboard_stats() -> dict:
+    """面试记录页统计条（Phase 4）。"""
+    with conn_ctx() as conn:
+        row = conn.execute(
+            """SELECT (SELECT COUNT(*) FROM interviews) AS interviews,
+                      (SELECT COUNT(*) FROM qa_items WHERE deleted=0) AS qa_total,
+                      (SELECT COUNT(*) FROM qa_items WHERE deleted=0
+                        AND status IN ('pending','auto')) AS qa_pending,
+                      (SELECT COUNT(DISTINCT company) FROM interviews
+                        WHERE company IS NOT NULL AND company <> '') AS companies""").fetchone()
+    return dict(row) if row else {"interviews": 0, "qa_total": 0, "qa_pending": 0, "companies": 0}
 
 
 # ---------- qa_items ----------
@@ -103,11 +168,12 @@ def insert_qa(q: dict) -> str:
 
 
 def list_qa(interview_id: str) -> list[dict]:
+    """本场问答（按 seq 升序，排除软删除条目）。"""
     with conn_ctx() as conn:
         rows = conn.execute(
             """SELECT q.*, c.name AS category_name, c.type AS category_type
                FROM qa_items q LEFT JOIN categories c ON c.id = q.category_id
-               WHERE q.interview_id=? ORDER BY q.seq ASC""",
+               WHERE q.interview_id=? AND q.deleted=0 ORDER BY q.seq ASC""",
             (interview_id,)).fetchall()
     out = []
     for r in rows:
@@ -124,7 +190,7 @@ def get_qa(qid: str) -> dict | None:
         row = conn.execute(
             """SELECT q.*, c.name AS category_name, c.type AS category_type
                FROM qa_items q LEFT JOIN categories c ON c.id = q.category_id
-               WHERE q.id=?""", (qid,)).fetchone()
+               WHERE q.id=? AND q.deleted=0""", (qid,)).fetchone()
     if not row:
         return None
     d = dict(row)
@@ -169,6 +235,93 @@ def clear_qa_entry_links(interview_id: str) -> None:
             """UPDATE qa_items SET entry_id=NULL WHERE interview_id=?
                AND entry_id IS NOT NULL""", (interview_id,))
         conn.commit()
+
+
+# ---------- 校对操作（Phase 4：删除 / 合并 / 拆分） ----------
+
+def next_seq(interview_id: str) -> int:
+    with conn_ctx() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(MAX(seq),0) AS m FROM qa_items WHERE interview_id=?",
+            (interview_id,)).fetchone()
+    return int(row["m"]) + 1
+
+
+def renumber_seqs(interview_id: str) -> None:
+    """把本场 seq 重排为连续 1..N（合并/拆分/删除后调用）。"""
+    qas = list_qa(interview_id)
+    with conn_ctx() as conn:
+        for i, q in enumerate(qas, start=1):
+            if q["seq"] != i:
+                conn.execute("UPDATE qa_items SET seq=? WHERE id=?", (i, q["id"]))
+        conn.commit()
+
+
+def soft_delete_qa(qid: str) -> None:
+    """软删除误识别的问答（保留审计，不物理删除，R2 可追溯）。"""
+    update_qa(qid, {"deleted": 1})
+
+
+def merge_with_next(qid: str) -> dict:
+    """与下一条合并（校对：被误拆成两条的同一问答）。
+
+    红线 R2 处理：机器提取的问题文本 `q_text` **保持不变**，合并结果写入
+    `q_corrected_text`（界面标注"已合并"），原第二条软删除但数据保留可审计。
+    回答按顺序拼接；出处区间取两条的覆盖范围并用原文切片校验。
+    """
+    cur = get_qa(qid)
+    if not cur:
+        raise ValueError("问答条目不存在")
+    qas = list_qa(cur["interview_id"])
+    idx = next((i for i, q in enumerate(qas) if q["id"] == qid), None)
+    if idx is None or idx + 1 >= len(qas):
+        raise ValueError("已是最后一条问答，无法与下一条合并")
+    nxt = qas[idx + 1]
+
+    merged_text = f"{cur['q_text']}\n{nxt['q_text']}".strip()
+    refs = [r for r in (cur.get("q_source_ref"), nxt.get("q_source_ref")) if r]
+    merged_ref = None
+    if refs:
+        start = min(int(r.get("start", 0)) for r in refs)
+        end = max(int(r.get("end", 0)) for r in refs)
+        raw = (get_interview(cur["interview_id"]) or {}).get("raw_transcript") or ""
+        quote = raw[start:end + 1] if 0 <= start <= end < len(raw) else (refs[0].get("quote") or "")
+        merged_ref = {"start": start, "end": end, "quote": quote}
+
+    answers = list(cur.get("answers") or []) + list(nxt.get("answers") or [])
+    update_qa(qid, {
+        "q_corrected_text": merged_text, "q_is_corrected": 1,
+        "q_source_ref": merged_ref, "answers": answers, "status": "corrected",
+    })
+    soft_delete_qa(nxt["id"])
+    renumber_seqs(cur["interview_id"])
+    return {"kept": qid, "removed": nxt["id"], "answers": len(answers)}
+
+
+def split_qa(qid: str, answer_index: int) -> dict:
+    """拆分：从第 answer_index 条回答起划归新条目（校对误合并，反问后续答可分开）。"""
+    cur = get_qa(qid)
+    if not cur:
+        raise ValueError("问答条目不存在")
+    answers = list(cur.get("answers") or [])
+    k = int(answer_index)
+    if not (0 < k < len(answers)):
+        raise ValueError(f"拆分点需在 1..{max(len(answers) - 1, 0)} 之间（当前该题有 {len(answers)} 条回答）")
+    head, tail = answers[:k], answers[k:]
+    new_id = insert_qa({
+        "interview_id": cur["interview_id"], "seq": cur["seq"] + 1,
+        "parent_id": cur["id"], "status": "confirmed",
+        "q_text": cur["q_text"], "q_speaker_id": cur.get("q_speaker_id"),
+        "q_source_ref": cur.get("q_source_ref"), "q_confidence": cur.get("q_confidence"),
+        "q_is_corrected": cur.get("q_is_corrected"), "q_corrected_text": cur.get("q_corrected_text"),
+        "answers": tail, "annotation": "", "optimization": "",
+        "category_id": cur.get("category_id"), "entry_id": None,
+        "direction": cur.get("direction") or "normal", "tag_ids": cur.get("tag_ids") or [],
+        "confidence": cur.get("confidence"),
+    })
+    update_qa(qid, {"answers": head, "status": "confirmed"})
+    renumber_seqs(cur["interview_id"])
+    return {"kept": qid, "created": new_id, "kept_answers": len(head), "new_answers": len(tail)}
 
 
 # ---------- categories（Category.norm 去重，R3） ----------
@@ -345,15 +498,21 @@ def list_entries(category_id: str | None = None) -> list[dict]:
 
 
 def _count_interviews_of(source_qa_ids: Iterable[str]) -> int:
-    ids = list(source_qa_ids)
+    """统计一组出处 QA 覆盖的面试场次（分块查询，规避 SQLite 参数上限）。"""
+    ids = list(dict.fromkeys(source_qa_ids))
     if not ids:
         return 0
-    marks = ",".join("?" for _ in ids)
+    found: set[str] = set()
+    chunk_size = 800
     with conn_ctx() as conn:
-        row = conn.execute(
-            f"SELECT COUNT(DISTINCT interview_id) AS n FROM qa_items WHERE id IN ({marks})",
-            ids).fetchone()
-    return int(row["n"]) if row else 0
+        for i in range(0, len(ids), chunk_size):
+            chunk = ids[i:i + chunk_size]
+            marks = ",".join("?" for _ in chunk)
+            rows = conn.execute(
+                f"SELECT DISTINCT interview_id FROM qa_items WHERE id IN ({marks})",
+                chunk).fetchall()
+            found.update(r["interview_id"] for r in rows)
+    return len(found)
 
 
 def count_source_interviews(source_qa_ids: Iterable[str]) -> int:

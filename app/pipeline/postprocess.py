@@ -105,11 +105,15 @@ def assemble(items: list[dict], turns: list[dict],
             conf = min(conf, 0.5)
         if any_unmatched:
             conf = min(conf, 0.6)
+        # Phase 4：未提取到回答的条目（连续追问/候选人未作答）也保留，强制待人工确认
+        if not answers:
+            conf = min(conf, 0.5)
 
         category = item.get("category") or suggest_category(item["q_text"]) or "未分类"
         out.append({
             "seq": seq,
             "status": "confirmed" if conf >= 0.75 else "pending",
+            "direction": "normal",
             "q_text": item["q_text"],
             "q_speaker_id": q_speaker,
             "q_source_ref": q_ref,

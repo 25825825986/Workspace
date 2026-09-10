@@ -1,44 +1,61 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>导入面试复盘</h1>
-<p class="muted">三步：① 基本信息 → ② 粘贴转写文本并确认说话人角色 → ③ 创建并解析。</p>
+<section class="page-head">
+  <div>
+    <h1>导入面试</h1>
+    <p class="muted">三步：① 基本信息（可全部留空）→ ② 粘贴转写文本并确认说话人角色 → ③ 创建并解析。</p>
+  </div>
+</section>
 
-<div id="errbox" class="flash err wrap" style="display:none"></div>
+<div id="errbox" class="flash err" style="display:none"></div>
+<div id="warnbox" class="flash warn" style="display:none"></div>
 
 <section class="card">
-  <h2>① 基本信息</h2>
-  <div class="grid2">
-    <label>公司 <input id="f-company" placeholder="如：字节跳动"></label>
-    <label>岗位 <input id="f-position" placeholder="如：后端工程师"></label>
+  <h2>① 基本信息 <span class="muted small">（除转写文本外，其余字段都可留空）</span></h2>
+  <div class="grid3">
+    <label>面试公司 <input id="f-company" placeholder="如：字节跳动"></label>
+    <label>面试岗位 <input id="f-position" placeholder="如：后端工程师"></label>
+    <label>面试地点 <input id="f-location" placeholder="如：北京·海淀 / 线上"></label>
+    <label>面试时间 <input id="f-at" type="datetime-local"></label>
+    <label>期望薪资 <input id="f-salary" placeholder="如：25-30K×14"></label>
+    <label>时长 <input id="f-duration" placeholder="58 / 1小时30分" inputmode="text">
+      <span class="hint" id="duration-hint">支持 58、58分钟、1h30m、1.5小时</span>
+    </label>
     <label>面试类型
       <select id="f-type">
-        {% for k, v in interview_types.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}
+        {% for k, v in interview_types.items() %}<option value="{{ k }}" {{ 'selected' if k == 'technical' else '' }}>{{ v }}</option>{% endfor %}
       </select>
     </label>
-    <label>日期 <input id="f-date" type="date"></label>
+    <label class="span2">面试标题 <span class="muted small">（留空自动生成，可手动修改）</span>
+      <span class="row-inline">
+        <input id="f-title" placeholder="留空则按「公司-岗位-时间」自动生成">
+        <button class="btn small" type="button" id="btn-title">按规则重算</button>
+      </span>
+    </label>
   </div>
 </section>
 
 <section class="card">
   <h2>② 转写文本与说话人角色</h2>
-  <p class="muted">支持常见说话人标签：<code>[面试官] …</code>、<code>面试官：…</code>、<code>A：…</code>、<code>Speaker 0：…</code>。无标签文本将由系统按内容推断角色（可逐段修正）。</p>
+  <p class="muted small">支持常见说话人标签：<code>[面试官] …</code>、<code>面试官：…</code>、<code>A：…</code>、<code>Speaker 0：…</code>。
+    无标签文本会按段落切分并由系统推断角色（可逐段修正）。</p>
   <textarea id="f-text" rows="12" placeholder="粘贴面试录音的转写文本（可含说话人标签）……"></textarea>
   <div class="row">
     <button class="btn" id="btn-sample">载入示例文本</button>
     <button class="btn primary" id="btn-analyze">识别说话人与格式 →</button>
-    <span class="muted" id="analyze-info"></span>
+    <span class="muted small" id="analyze-info"></span>
   </div>
 
   <div id="analyze-result" style="display:none">
     <h3>说话人角色确认 <span class="muted small">（系统不猜测——请核对后进入下一步，R1）</span></h3>
-    <p id="fmt-line" class="muted"></p>
+    <p id="fmt-line" class="muted small"></p>
     <table class="tbl" id="speaker-table">
       <thead><tr><th>说话人</th><th>来源</th><th>置信度</th><th>角色</th><th>内容片段</th></tr></thead>
       <tbody></tbody>
     </table>
     <div class="row">
       <button class="btn primary" id="btn-create">③ 创建并解析 →</button>
-      <span class="muted" id="create-info"></span>
+      <span class="muted small" id="create-info"></span>
     </div>
   </div>
 </section>
@@ -49,8 +66,48 @@
 const $ = (id) => document.getElementById(id);
 function showErr(msg){ const b=$('errbox'); b.textContent=msg; b.style.display='block'; window.scrollTo(0,0); }
 function hideErr(){ $('errbox').style.display='none'; }
+function showWarn(msg){ const b=$('warnbox'); if(!msg){b.style.display='none';return;} b.textContent=msg; b.style.display='block'; }
 
-$('f-date').value = new Date().toISOString().slice(0,10);
+// 默认面试时间 = 当前时间（可清空，留空则按当前时间保存）
+(function () {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  $('f-at').value = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+})();
+
+// 「按规则重算」标题
+$('btn-title').addEventListener('click', async () => {
+  const r = await fetch('/api/title-preview', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({company: $('f-company').value, position: $('f-position').value,
+                          interview_at: $('f-at').value})});
+  const d = await r.json();
+  $('f-title').value = d.title || '';
+  $('f-title').dataset.auto = '1';
+  showWarn('');
+});
+
+// 公司/岗位/时间变化时，若标题仍是自动生成状态则自动刷新
+['f-company','f-position','f-at'].forEach(id => {
+  $(id).addEventListener('change', async () => {
+    if ($('f-title').value && $('f-title').dataset.auto !== '1') return;  // 用户手动改过 → 不覆盖
+    const r = await fetch('/api/title-preview', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({company: $('f-company').value, position: $('f-position').value,
+                            interview_at: $('f-at').value})});
+    const d = await r.json();
+    if (d.title) { $('f-title').value = d.title; $('f-title').dataset.auto = '1'; }
+  });
+});
+$('f-title').addEventListener('input', () => { $('f-title').dataset.auto = '0'; });
+
+// 时长输入即时提示（不阻断）
+$('f-duration').addEventListener('input', () => {
+  const v = $('f-duration').value.trim();
+  const hint = $('duration-hint');
+  if (!v) { hint.textContent = '支持 58、58分钟、1h30m、1.5小时'; hint.classList.remove('warn-text'); return; }
+  const ok = /^\d+(\.\d+)?$/.test(v) || /^(?:(\d+(\.\d+)?)(小时|个小时|h|hr|hrs|hour|hours))?(?:(\d+(\.\d+)?)(分钟|分|min|mins|minute|minutes|m))?$/i.test(v.replace(/\s/g,''));
+  hint.textContent = ok ? '将保存为分钟数' : '暂无法识别，创建后会按"未知时长"处理（不阻断导入）';
+  hint.classList.toggle('warn-text', !ok);
+});
 
 $('btn-sample').addEventListener('click', async () => {
   const r = await fetch('/static/sample_transcript.txt');
@@ -62,62 +119,81 @@ let text = '', speakers = [];
 
 $('btn-analyze').addEventListener('click', async () => {
   text = $('f-text').value.trim();
-  if(!text) return showErr('请先粘贴或载入转写文本。');
-  hideErr();
+  if (!text) return showErr('请先粘贴或载入转写文本。');
+  hideErr(); showWarn('');
   const btn = $('btn-analyze'); btn.disabled = true; $('analyze-info').textContent = '识别中…';
   try {
     const r = await fetch('/api/analyze', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({text})});
     const data = await r.json();
-    if(!r.ok) { showErr(data.error || '识别失败'); return; }
+    if (!r.ok) { showErr(data.error || '识别失败'); return; }
     speakers = data.speakers || [];
     $('analyze-result').style.display = 'block';
-    $('fmt-line').textContent = `文本格式：${data.format_label}（${data.chars} 字符，${data.turns} 个轮次）；当前解析器：${data.extractor_label}`;
+    $('fmt-line').textContent = `文本格式：${data.format_label}（${data.chars} 字符，${data.turns} 个发言段）；当前解析器：${data.extractor_label}`;
+    if (data.duplicate) {
+      showWarn(`注意：系统已存在相同原文的面试《${data.duplicate.title}》（${data.duplicate.created_at}）。若确需再次导入，请在下一步确认。`);
+    }
     const tbody = $('speaker-table').querySelector('tbody');
     tbody.innerHTML = '';
-    for(const sp of speakers){
+    const names = {interviewer:'面试官(提问)', self:'我(回答)', other:'其他/无关', unknown:'待定'};
+    for (const sp of speakers) {
+      const roleSel = ['interviewer','self','other','unknown'].map(v =>
+        `<option value="${v}"${v === sp.role ? ' selected' : ''}>${names[v]}</option>`).join('');
       const tr = document.createElement('tr');
-      const roleSel = ['interviewer','self','other','unknown'].map(v => {
-        const sel = v === sp.role;
-        const names = {interviewer:'面试官(提问)', self:'我(回答)', other:'其他/无关', unknown:'待定'};
-        return `<option value="${v}"${sel?' selected':''}>${names[v]}</option>`;
-      }).join('');
       tr.innerHTML = `
         <td><b>${sp.label}</b></td>
-        <td><span class="chip">${sp.source==='label' ? '标签直读' : '内容推断'}</span></td>
-        <td>${Math.round((sp.confidence||0)*100)}%</td>
+        <td><span class="chip">${sp.source === 'label' ? '标签直读' : '内容推断'}</span></td>
+        <td>${Math.round((sp.confidence || 0) * 100)}%</td>
         <td><select class="role-sel">${roleSel}</select></td>
         <td class="muted small">${sp.sample || ''}</td>`;
       tbody.appendChild(tr);
     }
-    if(data.format === 'none'){
-      $('fmt-line').textContent += ' ｜ ⚠ 无标签文本：角色为低置信推断，请逐段核对（真实推断建议配置 DEEPSEEK_API_KEY）。';
+    if (data.format === 'none') {
+      $('fmt-line').textContent += ' ｜ ⚠ 无标签文本：角色为低置信推断，请逐段核对（配置 API Key 后可由 AI 推断）。';
     }
-  } catch(e){ showErr('网络错误：' + e.message); }
-  finally { btn.disabled = false; $('analyze-info').textContent=''; }
+  } catch (e) { showErr('网络错误：' + e.message); }
+  finally { btn.disabled = false; $('analyze-info').textContent = ''; }
 });
 
-$('btn-create').addEventListener('click', async () => {
-  const meta = {
+async function createInterview(force) {
+  const payload = {
     company: $('f-company').value.trim(),
     position: $('f-position').value.trim(),
+    location: $('f-location').value.trim(),
+    interview_at: $('f-at').value,
+    expected_salary: $('f-salary').value.trim(),
+    duration: $('f-duration').value.trim(),
+    title: $('f-title').value.trim(),
     interview_type: $('f-type').value,
-    date: $('f-date').value,
+    text, force: !!force,
   };
-  const role_map = {};
+  payload.role_map = {};
   document.querySelectorAll('#speaker-table tbody tr').forEach((tr, i) => {
-    if(speakers[i]) role_map[speakers[i].label] = tr.querySelector('.role-sel').value;
+    if (speakers[i]) payload.role_map[speakers[i].label] = tr.querySelector('.role-sel').value;
   });
-  const btn = $('btn-create'); btn.disabled = true; $('create-info').textContent = '解析中（长文本可能需要一段时间）…';
+  const btn = $('btn-create'); btn.disabled = true;
+  $('create-info').textContent = '解析中（长文本可能需要一点时间）…';
   try {
     const r = await fetch('/api/interviews', {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({...meta, text, role_map})});
+      body: JSON.stringify(payload)});
     const data = await r.json();
-    if(!r.ok) { showErr(data.error || '创建失败'); return; }
+    if (r.status === 409 && data.duplicate) {
+      const ex = data.existing || {};
+      if (confirm(`${data.error}\n\n仍然要导入这份转写吗？`)) { return createInterview(true); }
+      $('create-info').textContent = '';
+      return;
+    }
+    if (!r.ok) { showErr(data.error || '创建失败'); return; }
+    const extra = [];
+    if (data.pending_count) extra.push(`${data.pending_count} 个待确认`);
+    if (data.blank_answer_count) extra.push(`${data.blank_answer_count} 个无回答`);
+    if (data.warnings && data.warnings.length) extra.push(data.warnings.join('；'));
     location.href = '/interviews/' + data.interview_id + '?ok=' + encodeURIComponent(
-      `已提取 ${data.qa_count} 个问答` + (data.pending_count ? `（其中 ${data.pending_count} 个待确认）` : ''));
-  } catch(e){ showErr('网络错误：' + e.message); }
-  finally { btn.disabled = false; $('create-info').textContent=''; }
-});
+      `已提取 ${data.qa_count} 个问答` + (extra.length ? `（${extra.join('，')}）` : ''));
+  } catch (e) { showErr('网络错误：' + e.message); }
+  finally { btn.disabled = false; $('create-info').textContent = ''; }
+}
+
+$('btn-create').addEventListener('click', () => createInterview(false));
 </script>
 {% endblock %}

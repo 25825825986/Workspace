@@ -73,7 +73,13 @@ def parse_turns(text: str, fmt: str) -> list[dict]:
     """按格式把原文切成轮次。返回元素：
     {idx, label, text, start, end}（start/end 为 raw_transcript 字符区间，
     供 source_ref 溯源与高亮，保证忠实可审计）。
+
+    Phase 4：无标签文本（fmt=none）按**逐行**切分为候选发言段（text=原文切片），
+    随后由 merge_by_role 依据推断角色把相邻同角色的行归并——这样"逐行转写"与
+    "多行一段"两种写法都能正确处理。
     """
+    if fmt == "none":
+        return _line_turns(text)
     turns: list[dict] = []
     pos = 0
     seg_no = 0
@@ -87,7 +93,7 @@ def parse_turns(text: str, fmt: str) -> list[dict]:
         label, content = _split_line(stripped, fmt)
         if label is None:
             seg_no += 1
-            label = f"说话人{seg_no:02d}" if fmt == "none" else f"未知{seg_no}"
+            label = f"未知{seg_no}"
             content = stripped
         # 定位 content 在原文中的真实区间（跳过行首空白与标签部分）
         real_start = text.find(content, start, pos)
@@ -98,9 +104,59 @@ def parse_turns(text: str, fmt: str) -> list[dict]:
             real_end = real_start + len(content)
         turns.append({"idx": len(turns), "label": label,
                       "text": content, "start": real_start, "end": real_end})
-    if fmt != "none":
-        turns = _merge_same_label(turns)
+    return _merge_same_label(turns)
+
+
+def _line_turns(text: str) -> list[dict]:
+    """无标签文本：逐行作为候选发言段（text=原文精确切片，逐字忠实）。
+
+    行内空白与换行不影响角色推断；相邻同角色行稍后由 merge_by_role 归并。
+    """
+    turns: list[dict] = []
+    pos = 0
+    for line in text.splitlines():
+        raw = line + "\n"
+        line_start = pos
+        pos += len(raw)
+        if not line.strip():
+            continue
+        start = line_start + (len(line) - len(line.lstrip()))
+        end = line_start + len(line.rstrip()) - 1
+        turns.append(_segment(len(turns), text, start, end))
     return turns
+
+
+def _segment(idx: int, text: str, start: int, end: int) -> dict:
+    end = max(end, start)
+    return {"idx": idx, "label": f"说话人{idx + 1:02d}",
+            "text": text[start:end + 1], "start": start, "end": end}
+
+
+def merge_by_role(turns: list[dict], role_of: dict[str, str], raw: str = "") -> list[dict]:
+    """把相邻且角色相同的段合并为一条轮次（Phase 4：让无标签文本的问答切分可用）。
+
+    仅合并 interviewer/self 两类（other/unknown 保留原样）；合并后的文本取
+    **原文连续切片** raw[start:end+1]，因此仍是逐字原文（R2）。合并后重新编号 idx。
+    """
+    merged: list[dict] = []
+    for t in turns:
+        role = role_of.get(t["label"], "unknown")
+        can_merge = (bool(merged) and role in ("interviewer", "self")
+                     and merged[-1].get("role") == role
+                     and not _ends_with_question(merged[-1]["text"])
+                     and not _looks_like_question(t["text"]))
+        if can_merge:
+            prev = merged[-1]
+            prev["end"] = max(prev["end"], t["end"])
+        else:
+            item = dict(t)
+            item["role"] = role
+            merged.append(item)
+    for i, t in enumerate(merged):
+        t["idx"] = i
+        if raw:
+            t["text"] = raw[t["start"]:t["end"] + 1]
+    return merged
 
 
 def _split_line(stripped: str, fmt: str) -> tuple[str | None, str]:
@@ -129,9 +185,18 @@ def _split_line(stripped: str, fmt: str) -> tuple[str | None, str]:
 
 
 def _merge_same_label(turns: list[dict]) -> list[dict]:
+    """合并同一说话人的连续行（多行回答、被换行拆开的同一句话）。
+
+    Phase 4：遇到"新的一个问题"就不再合并——上一行以问号结束，或新一行本身是问句
+    （问号结尾/以疑问引导词开头）时，各自成为独立轮次，避免"连续追问"被并成一题；
+    这样 RuleExtractor 能把它们切成两条问答（无回答的那条标为待确认）。
+    """
     merged: list[dict] = []
     for t in turns:
-        if merged and merged[-1]["label"] == t["label"]:
+        can_merge = (bool(merged) and merged[-1]["label"] == t["label"]
+                     and not _ends_with_question(merged[-1]["text"])
+                     and not _looks_like_question(t["text"]))
+        if can_merge:
             prev = merged[-1]
             prev["end"] = t["end"]
             prev["text"] = prev["text"] + "\n" + t["text"] if prev["text"] else t["text"]
@@ -141,6 +206,18 @@ def _merge_same_label(turns: list[dict]) -> list[dict]:
     for i, t in enumerate(merged):
         t["idx"] = i
     return merged
+
+
+def _ends_with_question(text: str) -> bool:
+    return bool(re.search(r"[?？]\s*$", (text or "").strip()))
+
+
+def _looks_like_question(text: str) -> bool:
+    """是否需要作为"新问题"起一条（用于避免连续追问被并成同一题）。"""
+    t = (text or "").strip()
+    if not t:
+        return False
+    return bool(_ends_with_question(t)) or t.startswith(_QUESTION_WORDS)
 
 
 def alias_role(label: str) -> str | None:
@@ -154,17 +231,21 @@ def alias_role(label: str) -> str | None:
 
 
 def heuristic_role(text: str) -> tuple[str, float]:
-    """mock/规则路径下对无标签候选段的低置信推断（source=inferred）。"""
+    """mock/规则路径下对无标签候选段的低置信推断（source=inferred，全部可人工纠正）。
+
+    Phase 4 调整：中等长度的陈述句按"回答"处理（低置信 0.45），避免整段被判 unknown
+    导致无标签文本无法进入提取；短句仍按"其他"处理。
+    """
     t = (text or "").strip()
     if not t:
         return "unknown", 0.2
     if len(t) <= 200 and (_QUESTION_END.search(t) or t.startswith(_QUESTION_WORDS)):
         return "interviewer", 0.6
-    if len(t) >= 60:
-        return "self", 0.55
-    if len(t) <= 20:
-        return "other", 0.5
-    return "unknown", 0.4
+    if len(t) >= 20:
+        return "self", 0.45
+    if len(t) <= 12:
+        return "other", 0.45
+    return "self", 0.4
 
 
 def ordered_labels(turns: list[dict]) -> list[str]:

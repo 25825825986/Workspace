@@ -24,6 +24,11 @@ CREATE TABLE IF NOT EXISTS interviews (
     title             TEXT NOT NULL,
     company           TEXT,
     position          TEXT,
+    location          TEXT,                    -- Phase 4：面试地点
+    interview_at      TEXT,                    -- Phase 4：面试时间（ISO，精确到分钟）
+    expected_salary   TEXT,                    -- Phase 4：期望薪资（自由文本）
+    duration_minutes  INTEGER,                 -- Phase 4：整场时长（分钟）
+    transcript_hash   TEXT,                    -- Phase 4：原文指纹，用于重复导入检测
     interview_type    TEXT NOT NULL DEFAULT 'mixed',
     date              TEXT,
     raw_transcript    TEXT NOT NULL,
@@ -34,6 +39,7 @@ CREATE TABLE IF NOT EXISTS interviews (
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_interviews_hash ON interviews(transcript_hash);
 
 CREATE TABLE IF NOT EXISTS categories (
     id            TEXT PRIMARY KEY,
@@ -63,6 +69,8 @@ CREATE TABLE IF NOT EXISTS qa_items (
     optimization    TEXT,
     category_id     TEXT,
     entry_id        TEXT,
+    direction       TEXT NOT NULL DEFAULT 'normal',  -- Phase 4：normal=面试官问 / reverse=我提问（反问环节）
+    deleted         INTEGER NOT NULL DEFAULT 0,      -- Phase 4：软删除（校对误识别，保留审计）
     tag_ids         TEXT NOT NULL DEFAULT '[]',
     confidence      REAL,
     created_at      TEXT NOT NULL,
@@ -71,6 +79,7 @@ CREATE TABLE IF NOT EXISTS qa_items (
 CREATE INDEX IF NOT EXISTS idx_qa_interview ON qa_items(interview_id);
 CREATE INDEX IF NOT EXISTS idx_qa_category  ON qa_items(category_id);
 CREATE INDEX IF NOT EXISTS idx_qa_entry     ON qa_items(entry_id);
+CREATE INDEX IF NOT EXISTS idx_qa_deleted   ON qa_items(interview_id, deleted);
 
 CREATE TABLE IF NOT EXISTS entries (
     id                TEXT PRIMARY KEY,

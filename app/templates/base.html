@@ -5,17 +5,27 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}AI_Review · AI 面试复盘{% endblock %}</title>
 <link rel="stylesheet" href="/static/style.css">
+<script>
+/* 首屏状态注入：在 body 渲染前执行，避免"答案闪现"与主题闪烁（Phase 4 / Q9 优化） */
+(function () {
+  try {
+    var t = localStorage.getItem('ai_review_theme');
+    if (t === 'dark' || t === 'light') document.documentElement.setAttribute('data-theme', t);
+  } catch (e) { /* 隐私模式下忽略 */ }
+})();
+</script>
+{% block head_extra %}{% endblock %}
 </head>
-<body>
+<body data-iid="{{ iv.id if iv else '' }}">
 <header class="topbar">
   <div class="wrap">
     <a class="brand" href="/">AI_Review</a>
     <nav>
-      <a href="/" class="{{ 'active' if nav=='index.html' else '' }}">工作台</a>
-      <a href="/import" class="{{ 'active' if nav=='import.html' else '' }}">导入复盘</a>
-      <a href="/bank" class="{{ 'active' if nav=='bank.html' else '' }}">面经库</a>
+      <a href="/" class="{{ 'active' if request.endpoint == 'page_index' else '' }}">面试记录</a>
+      <a href="/import" class="{{ 'active' if request.endpoint == 'page_import' else '' }}">导入面试</a>
+      <a href="/bank" class="{{ 'active' if request.endpoint in ('page_bank', 'page_export_bank') else '' }}">知识库</a>
     </nav>
-    <span class="extractor-badge">解析：{{ extractor_label }}</span>
+    <span class="extractor-badge" title="当前解析方式">解析：{{ extractor_label }}</span>
   </div>
 </header>
 
