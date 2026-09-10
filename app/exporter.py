@@ -14,7 +14,7 @@ def _speaker_display(iv: dict, sid: str | None) -> str:
         return "未知"
     for sp in iv.get("speaker_map", []):
         if sp["id"] == sid:
-            return ROLE_LABEL.get(sp["role"], sp.get("label", sid))
+            return ROLE_LABEL.get(sp["role"]) or sp.get("label") or sid
     return sid
 
 
