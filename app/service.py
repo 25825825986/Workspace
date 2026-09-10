@@ -12,7 +12,8 @@ import hashlib
 import re
 
 from . import repository
-from .config import RAW_DIR, extractor_label, extractor_mode, ensure_dirs
+from . import config
+from .config import RAW_DIR, ensure_dirs
 from .pipeline import extract as extract_mod
 from .pipeline import postprocess, preprocess
 from .util import clean_role, now, uid
@@ -146,7 +147,7 @@ def analyze(text: str) -> dict:
     dup = repository.find_interview_by_hash(transcript_hash(text))
     return {"format": fmt, "format_label": FORMAT_LABEL.get(fmt, fmt),
             "chars": len(text), "turns": len(turns),
-            "extractor": extractor_mode(), "extractor_label": extractor_label(),
+            "extractor": config.extractor_mode(), "extractor_label": config.extractor_label(),
             "duplicate": dup, "speakers": speakers}
 
 
@@ -196,7 +197,7 @@ def run_import(payload: dict) -> dict:
             "无标签文本请在向导中逐段指定，或配置 DEEPSEEK_API_KEY 后由 AI 推断。")
 
     # 2) LLM 路径对无标签文本的增强角色推断
-    mode = extractor_mode()
+    mode = config.extractor_mode()
     extractor = extract_mod.make_extractor(mode)
     if mode == "deepseek" and fmt == "none" and extractor.name == "deepseek":
         inferred = extractor.infer_roles(turns)  # {turn_idx: role}

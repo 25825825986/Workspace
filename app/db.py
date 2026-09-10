@@ -90,12 +90,74 @@ CREATE TABLE IF NOT EXISTS entries (
     optimization      TEXT,
     source_qa_ids     TEXT NOT NULL DEFAULT '[]',
     ask_times         INTEGER NOT NULL DEFAULT 0,
+    topic             TEXT,                    -- Phase 6：专题（self_intro/growth/reverse/''）
+    group_name        TEXT,                    -- Phase 6：一级分类（项目经历/技术栈/团队协作/系统设计/行为问题/其他）
+    best_qa_id        TEXT,                    -- Phase 6：人工标记的"最佳作答"
     tag_ids           TEXT NOT NULL DEFAULT '[]',
     first_asked_at    TEXT,
     last_asked_at     TEXT,
     updated_at        TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_entries_category ON entries(category_id);
+CREATE INDEX IF NOT EXISTS idx_entries_group   ON entries(group_name);
+CREATE INDEX IF NOT EXISTS idx_entries_topic   ON entries(topic);
+
+-- Phase 6：相似问题关联（规则/AI/人工三种来源）
+CREATE TABLE IF NOT EXISTS similar_pairs (
+    id          TEXT PRIMARY KEY,
+    a_entry_id  TEXT NOT NULL,
+    b_entry_id  TEXT NOT NULL,
+    score       REAL NOT NULL DEFAULT 0,
+    method      TEXT NOT NULL DEFAULT 'rule',   -- rule | ai | manual
+    reason      TEXT,
+    created_at  TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_similar_pair ON similar_pairs(a_entry_id, b_entry_id);
+CREATE INDEX IF NOT EXISTS idx_similar_a ON similar_pairs(a_entry_id);
+CREATE INDEX IF NOT EXISTS idx_similar_b ON similar_pairs(b_entry_id);
+
+-- Phase 7：简历 / 模拟面试会话与逐题记录
+CREATE TABLE IF NOT EXISTS resumes (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    content_text  TEXT NOT NULL,
+    skills_json   TEXT NOT NULL DEFAULT '[]',
+    projects_json TEXT NOT NULL DEFAULT '[]',
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS mock_sessions (
+    id                TEXT PRIMARY KEY,
+    mode              TEXT NOT NULL DEFAULT 'bank',   -- whole | bank | resume
+    interview_id      TEXT,
+    resume_id         TEXT,
+    title             TEXT NOT NULL,
+    config_json       TEXT NOT NULL DEFAULT '{}',
+    status            TEXT NOT NULL DEFAULT 'running', -- running | finished
+    question_count    INTEGER NOT NULL DEFAULT 0,
+    answered_count    INTEGER NOT NULL DEFAULT 0,
+    started_at        TEXT NOT NULL,
+    finished_at       TEXT
+);
+
+CREATE TABLE IF NOT EXISTS mock_turns (
+    id                 TEXT PRIMARY KEY,
+    session_id         TEXT NOT NULL REFERENCES mock_sessions(id),
+    seq                INTEGER NOT NULL,
+    question_text      TEXT NOT NULL,
+    source             TEXT NOT NULL DEFAULT 'bank',   -- whole | bank | ai
+    reference_entry_id TEXT,
+    reference_answer   TEXT,
+    reference_tips     TEXT,
+    my_answer          TEXT,
+    elapsed_sec        INTEGER,
+    mark               TEXT,                            -- good | unsure | blank
+    is_follow_up       INTEGER NOT NULL DEFAULT 0,
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mock_turns_session ON mock_turns(session_id);
 
 CREATE TABLE IF NOT EXISTS tags (
     id    TEXT PRIMARY KEY,

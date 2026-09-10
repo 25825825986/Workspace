@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}对比 · {{ entry.head_question }}{% endblock %}
+
+{% block head_extra %}
+<style>
+.cmp-table{width:100%;border-collapse:separate;border-spacing:0 10px}
+.cmp-table th{font-size:var(--fs-xs);color:var(--muted);text-align:left;padding:0 10px 4px}
+.cmp-table td{background:var(--surface-2);border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+  padding:10px;vertical-align:top;font-size:13.5px}
+.cmp-table td:first-child{border-left:1px solid var(--line);border-radius:var(--r) 0 0 var(--r);width:180px}
+.cmp-table td:last-child{border-right:1px solid var(--line);border-radius:0 var(--r) var(--r) 0}
+.sim-item{display:flex;justify-content:space-between;gap:var(--sp-3);align-items:center;
+  padding:8px 10px;border:1px solid var(--line);border-radius:var(--r);margin-bottom:6px;background:var(--surface)}
+</style>
+{% endblock %}
+
+{% block content %}
+<nav class="crumbs"><a href="/knowledge">知识库</a> / 对比</nav>
+
+<section class="page-head">
+  <div>
+    <h1>{{ entry.head_question }}</h1>
+    <p class="muted small">
+      {{ entry.category_name or '未分类' }}{% if entry.group_name %} · {{ entry.group_name }}{% endif %}
+      {% if entry.topic %} · 专题：{{ topics.get(entry.topic, entry.topic) }}{% endif %}
+      ｜ 被问 <b>{{ entry.ask_times }}</b> 次 · 出处 {{ entry.source_interview_count }} 场 ·
+      最近 {{ (entry.last_asked_at or '')[:10] or '-' }}
+    </p>
+  </div>
+  <div class="ops">
+    <a class="btn" href="/knowledge">← 返回知识库</a>
+  </div>
+</section>
+
+<section class="card">
+  <h2>相似问题关联 <span class="muted small">（{{ neighbors|length }} 条）</span></h2>
+  {% if neighbors %}
+    {% for n in neighbors %}
+    <div class="sim-item">
+      <div>
+        <a href="/knowledge/compare/{{ n.entry.id }}">{{ n.entry.head_question }}</a>
+        <span class="muted small">｜{{ n.entry.group_name or '其他' }}｜被问 {{ n.entry.ask_times }} 次</span>
+      </div>
+      <div class="ops">
+        {% set suspected = (n.reason or '').startswith('疑似') %}
+        <span class="chip {{ 's-pending' if suspected else ('s-confirmed' if n.method in ('manual', 'ai') else '') }}">
+          {% if n.method == 'manual' %}人工确认{% elif n.method == 'ai' %}AI 判定{% elif suspected %}疑似{% else %}规则判定{% endif %}
+          {{ (n.score * 100) | round | int }}%</span>
+        {% if suspected or n.method == 'rule' %}
+        <button class="btn small" data-confirm-sim="{{ n.entry.id }}" data-score="{{ n.score }}">确认为同一问题</button>
+        {% endif %}
+        <button class="btn small danger" data-unlink="{{ n.entry.id }}">取消关联</button>
+      </div>
+    </div>
+    {% endfor %}
+  {% else %}
+    <p class="muted small">暂无相似问题。可点「搜索并关联」手动建立，或在知识库页点「重算相似关联」。</p>
+  {% endif %}
+  <div class="row">
+    <input id="sim-q" placeholder="输入要关联的问题文本，例如：缓存是怎么实现的？" style="flex:1 1 320px">
+    <button class="btn" id="btn-sim-search">搜索并关联</button>
+    <span class="muted small" id="sim-info"></span>
+  </div>
+  <div id="sim-results"></div>
+</section>
+
+<section class="card">
+  <h2>历史作答对比 <span class="muted small">（共 {{ rows|length }} 次作答）</span></h2>
+  <p class="muted small">忠实原文为逐字引用（含口误卡壳）；优化建议与批注独立成列——对比只看差异，不改写事实。</p>
+  {% if rows %}
+  <table class="cmp-table">
+    <thead><tr>
+      <th>来源面试</th><th>忠实原文回答</th><th>优化建议</th><th>批注 / 操作</th>
+    </tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>
+          <a href="/interviews/{{ r.interview_id }}/qa/{{ r.id }}">{{ r.interview_title or '（未知面试）' }}</a>
+          <div class="muted small">{{ (r.interview_at or r.interview_date or '')[:16] }}
+            {% if r.interview_company %}· {{ r.interview_company }}{% endif %}</div>
+          {% if r.is_best %}<span class="chip s-confirmed">最佳作答</span>{% endif %}
+        </td>
+        <td>
+          {% for a in r.answers %}
+          <p class="verbatim">{{ a.corrected_text if a.is_corrected else a.extract_text }}</p>
+          {% endfor %}
+          {% if not r.answers %}<span class="warn-text small">（无回答）</span>{% endif %}
+          <div class="muted small">问题原文：{{ r.q_text }}</div>
+        </td>
+        <td class="small">{{ r.optimization or '（未填写）' }}</td>
+        <td>
+          {% if r.annotation %}<div class="small">{{ r.annotation }}</div>{% endif %}
+          <button class="btn small" data-best="{{ r.id }}">{{ '取消最佳' if r.is_best else '标为最佳作答' }}</button>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted small">该条目还没有关联到具体作答记录。</p>
+  {% endif %}
+</section>
+
+{% if entry.question_variants %}
+<section class="card">
+  <h2>变体问法</h2>
+  <p class="small">{{ entry.question_variants | join(' ｜ ') }}</p>
+</section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+const ENTRY_ID = '{{ entry.id }}';
+const BEST_QA = '{{ entry.best_qa_id or "" }}';
+
+document.querySelectorAll('[data-unlink]').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    if (!confirm('取消这条相似关联？')) return;
+    try {
+      await postJSON('/api/similar/unlink', {a_entry_id: ENTRY_ID, b_entry_id: btn.dataset.unlink});
+      location.reload();
+    } catch (e) { alert(e.message); }
+  });
+});
+
+document.querySelectorAll('[data-confirm-sim]').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    try {
+      await postJSON('/api/similar/confirm', {
+        a_entry_id: ENTRY_ID, b_entry_id: btn.dataset.confirmSim, score: Number(btn.dataset.score || 0.8),
+      });
+      location.reload();
+    } catch (e) { alert(e.message); }
+  });
+});
+
+document.querySelectorAll('[data-best]').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const qaId = btn.dataset.best;
+    const next = (BEST_QA === qaId) ? null : qaId;
+    try {
+      await postJSON('/api/entries/' + ENTRY_ID + '/best', {qa_id: next});
+      location.reload();
+    } catch (e) { alert(e.message); }
+  });
+});
+
+document.getElementById('btn-sim-search').addEventListener('click', async () => {
+  const q = document.getElementById('sim-q').value.trim();
+  const info = document.getElementById('sim-info');
+  const box = document.getElementById('sim-results');
+  box.innerHTML = '';
+  if (!q) { info.textContent = '请输入问题文本'; return; }
+  info.textContent = '检索中…';
+  try {
+    const d = await postJSON('/api/knowledge/search?q=' + encodeURIComponent(q), {});
+    info.textContent = d.items.length ? '选择要关联的条目：' : '没有找到相近条目';
+    d.items.filter(i => i.entry_id !== ENTRY_ID).forEach(i => {
+      const row = document.createElement('div');
+      row.className = 'sim-item';
+      row.innerHTML = `<div>${i.head_question} <span class="muted small">｜${i.group_name || '其他'}｜相似度 ${(i.score*100).toFixed(0)}%</span></div>`;
+      const link = document.createElement('button');
+      link.className = 'btn small';
+      link.textContent = '关联';
+      link.addEventListener('click', async () => {
+        try {
+          await postJSON('/api/similar/confirm', {a_entry_id: ENTRY_ID, b_entry_id: i.entry_id, score: i.score});
+          location.reload();
+        } catch (e) { alert(e.message); }
+      });
+      row.appendChild(link);
+      box.appendChild(row);
+    });
+  } catch (e) { info.textContent = '失败：' + e.message; }
+});
+</script>
+{% endblock %}

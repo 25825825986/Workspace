@@ -31,3 +31,19 @@ document.querySelectorAll('[data-post]').forEach((btn) => {
     }
   });
 });
+
+/* 顶栏快速切换主题（浅 ↔ 深）：本地立即生效，并写入设置以便下次打开保持 */
+(function () {
+  const btn = document.getElementById('theme-toggle');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    const el = document.documentElement;
+    const next = el.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    el.setAttribute('data-theme', next);
+    try {
+      await postJSON('/api/settings', { theme: next });
+    } catch (e) {
+      /* 写入失败也保留本次视觉切换 */
+    }
+  });
+})();

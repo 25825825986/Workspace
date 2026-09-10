@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import re
 
-from .. import repository
+from .. import knowledge, repository
 from .extract import suggest_category
+from . import similar
 
 _PUNCT = re.compile(r"[\s,，。.．？?、；;：:!！~～·•\-—_/\\|（）()【】\[\]《》〈〉<>「」『』“”\"'‘’…*#@&]+")
 
@@ -45,6 +46,9 @@ def assemble(items: list[dict], turns: list[dict],
     turn_by_idx = {t["idx"]: t for t in turns}
     out: list[dict] = []
     for seq, item in enumerate(items, start=1):
+        direction = item.get("direction") or "normal"
+        q_role = "self" if direction == "reverse" else "interviewer"      # 提问方
+        a_role = "interviewer" if direction == "reverse" else "self"      # 回答方
         q_turn = turn_by_idx.get(item["q_turn"]) if item["q_turn"] is not None else None
         q_ref = None
         q_speaker = None
@@ -52,9 +56,9 @@ def assemble(items: list[dict], turns: list[dict],
             q_ref = {"start": q_turn["start"], "end": q_turn["end"], "quote": q_turn["text"]}
             q_speaker = speaker_of_label.get(q_turn["label"])
         else:
-            # LLM 路径：在 interviewer 轮次中做归一化逐字对齐
+            # LLM 路径：在提问方轮次中做归一化逐字对齐（反转问答的提问方是"我"）
             for t in turns:
-                if role_of.get(t["label"]) != "interviewer":
+                if role_of.get(t["label"]) != q_role:
                     continue
                 span = find_verbatim(t["text"], item["q_text"])
                 if span:
@@ -63,20 +67,26 @@ def assemble(items: list[dict], turns: list[dict],
                              "quote": t["text"][span[0]:span[1] + 1]}
                     q_speaker = speaker_of_label.get(t["label"])
                     break
+        if q_speaker is None:
+            for label, role in role_of.items():
+                if role == q_role:
+                    q_speaker = speaker_of_label.get(label)
+                    break
 
         answers: list[dict] = []
         any_unmatched = False
         q_turn_start = q_turn["idx"] if q_turn is not None else -1
-        self_turns = [t for t in turns if role_of.get(t["label"]) == "self"]
+        answer_turns = [t for t in turns if role_of.get(t["label"]) == a_role]
         for a in item.get("answers", []):
             a_turn = turn_by_idx.get(a["turn"]) if a.get("turn") is not None else None
             a_ref = None
+            a_speaker = None
             if a_turn is not None:
                 a_ref = {"start": a_turn["start"], "end": a_turn["end"], "quote": a_turn["text"]}
                 a_speaker = speaker_of_label.get(a_turn["label"])
             else:
-                # LLM 路径：在该问之后按序匹配 self 轮次
-                candidates = [t for t in self_turns if t["idx"] > q_turn_start]
+                # LLM 路径：在该问之后按序匹配回答方轮次
+                candidates = [t for t in answer_turns if t["idx"] > q_turn_start]
                 for t in candidates:
                     span = find_verbatim(t["text"], a["text"])
                     if span:
@@ -113,7 +123,7 @@ def assemble(items: list[dict], turns: list[dict],
         out.append({
             "seq": seq,
             "status": "confirmed" if conf >= 0.75 else "pending",
-            "direction": "normal",
+            "direction": direction,
             "q_text": item["q_text"],
             "q_speaker_id": q_speaker,
             "q_source_ref": q_ref,
@@ -150,13 +160,24 @@ def merge_into_bank(interview_id: str, qa_id: str | None = None) -> dict:
         if q.get("entry_id"):
             continue
         cat = repository.get_or_create_category(q.get("category_name") or "未分类")
+        # Phase 6：专题 + 一级分类（反问环节由 direction 决定）
+        topic, group = knowledge.classify(q["q_text"], cat.get("name", ""), cat.get("type", ""),
+                                          q.get("direction") or "normal")
         entry = repository.find_entry_by_question(cat["id"], _q_norm(q["q_text"]))
         if not entry:
-            entry = repository.create_entry(cat["id"], q["q_text"])
+            entry = repository.create_entry(cat["id"], q["q_text"], topic, group)
+        elif not entry.get("group_name") or not entry.get("topic"):
+            repository.set_entry_classification(entry["id"], topic or entry.get("topic") or "",
+                                                group or entry.get("group_name") or "")
         repository.add_qa_to_entry(entry["id"], q, q["id"])
         repository.update_qa(q["id"], {"category_id": cat["id"], "entry_id": entry["id"]})
         merged += 1
-    return {"merged": merged, "skipped": skipped}
+
+    similar_stats = None
+    if merged:
+        # Phase 6：入库后增量重算相似关联（规则层，快；AI 灰区判定在知识库页手动触发）
+        similar_stats = similar.recompute(use_ai=False)
+    return {"merged": merged, "skipped": skipped, "similar": similar_stats}
 
 
 def _q_norm(text: str) -> str:

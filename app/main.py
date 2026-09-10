@@ -12,12 +12,15 @@ from __future__ import annotations
 import re
 from urllib.parse import quote
 
-from flask import (Flask, Response, abort, jsonify, render_template, request)
+from flask import (Flask, Response, abort, jsonify, redirect, render_template, request)
 
-from . import exporter, repository, service
-from .config import ensure_dirs, extractor_label, extractor_mode
+from . import config, exporter, knowledge, repository, service, settings_store
+from .config import (APP_VERSION, DB_PATH, EXPORT_DIR, ensure_dirs, extractor_label,
+                     extractor_mode)
 from .db import init_db
 from .migrations import run_migrations
+from .pipeline import llm as llm_mod
+from .pipeline import mock_gen, resume as resume_mod, similar
 from .pipeline.llm import LLMError
 from .service import ROLE_LABEL, DuplicateImportError, UsageError
 
@@ -37,7 +40,13 @@ run_migrations()
 
 @app.context_processor
 def _inject_globals():
+    settings = settings_store.load()
     return {"extractor_label": extractor_label(), "extractor_mode": extractor_mode(),
+            "theme": settings.get("theme", "system"),
+            "mode_badge": config.mode_badge(),
+            "ai_mode": config.ai_mode(),
+            "has_api_key": config.has_llm(),
+            "app_version": APP_VERSION,
             "interview_types": INTERVIEW_TYPES, "status_label": STATUS_LABEL}
 
 
@@ -127,25 +136,76 @@ def page_review_detail(iid: str, qid: str):
 
 @app.route("/bank")
 def page_bank():
+    """兼容旧链接：知识库已迁到 /knowledge。"""
+    return redirect("/knowledge")
+
+
+@app.route("/knowledge")
+def page_knowledge():
+    """知识库（Phase 6）：三专题置顶 + 一级分类分组 + 频次 + 相似关联入口 + 检索。"""
+    search = (request.args.get("q") or "").strip()
     entries = repository.list_entries()
-    groups: list[dict] = []
-    seen: dict[str, int] = {}
+    # 懒补：历史条目缺分类时按规则即时归类（幂等，只补一次）
     for e in entries:
-        cat = e.get("category_name") or "未分类"
-        if cat not in seen:
-            seen[cat] = len(groups)
-            groups.append({"category": cat, "entries": [], "total_ask": 0,
-                           "source_ids": [], "entry_count": 0})
-        g = groups[seen[cat]]
-        g["entries"].append(e)
-        g["total_ask"] += e["ask_times"]
-        g["source_ids"].extend(e["source_qa_ids"])
-        g["entry_count"] += 1
-    for g in groups:
-        g["interviews"] = repository.count_source_interviews(g["source_ids"])
-        g.pop("source_ids", None)
-    return render_template("bank.html", groups=groups, stats=repository.entry_stats(),
-                           categories=repository.list_categories())
+        if not e.get("group_name"):
+            topic, group = knowledge.classify(e.get("head_question", ""),
+                                              e.get("category_name", ""),
+                                              e.get("category_type", ""))
+            repository.set_entry_classification(e["id"], topic, group)
+            e["topic"], e["group_name"] = topic, group
+    if search:
+        low = search.lower()
+        entries = [e for e in entries
+                   if low in (e.get("head_question") or "").lower()
+                   or low in (e.get("category_name") or "").lower()
+                   or any(low in (v or "").lower() for v in (e.get("question_variants") or []))]
+
+    pair_map: dict[str, list[dict]] = {}
+    for p in repository.list_all_similar_pairs():
+        pair_map.setdefault(p["a_entry_id"], []).append(p)
+        pair_map.setdefault(p["b_entry_id"], []).append(p)
+
+    def decorate(e: dict) -> dict:
+        pairs = pair_map.get(e["id"], [])
+        suspected = [p for p in pairs if (p.get("reason") or "").startswith("疑似")]
+        e["similar_count"] = len(pairs)
+        e["similar_suspected"] = len(suspected)
+        e["similar_confirmed"] = len(pairs) - len(suspected)
+        e["similar_ids"] = [p["b_entry_id"] if p["a_entry_id"] == e["id"] else p["a_entry_id"]
+                            for p in pairs]
+        return e
+
+    topics = []
+    for key, label, desc in knowledge.TOPICS:
+        items = [decorate(e) for e in entries if (e.get("topic") or "") == key]
+        if items:
+            topics.append({"key": key, "label": label, "desc": desc, "entries": items,
+                           "total_ask": sum(i["ask_times"] for i in items)})
+    groups = []
+    for name in knowledge.GROUPS:
+        items = [decorate(e) for e in entries if (e.get("group_name") or "其他") == name]
+        if items:
+            groups.append({"name": name, "entries": items,
+                           "total_ask": sum(i["ask_times"] for i in items)})
+    return render_template("knowledge.html", topics=topics, groups=groups,
+                           stats=repository.entry_stats(), search=search,
+                           similar_pairs=repository.similar_pair_count(),
+                           ai_available=config.extractor_mode() == "deepseek")
+
+
+@app.route("/knowledge/compare/<entry_id>")
+def page_knowledge_compare(entry_id: str):
+    """相似问题完整对比（Phase 6）：同一考点的多次作答并列。"""
+    entry = repository.get_entry(entry_id)
+    if not entry:
+        abort(404)
+    neighbors = similar.neighbors(entry_id)
+    # 本条目历史作答明细（来源面试、忠实原文、优化建议、批注）
+    rows = repository.list_qa_detail(entry["source_qa_ids"])
+    for r in rows:
+        r["is_best"] = (entry.get("best_qa_id") == r["id"])
+    return render_template("compare.html", entry=entry, neighbors=neighbors, rows=rows,
+                           topics=knowledge.TOPIC_LABELS)
 
 
 @app.route("/interviews/<iid>/export")
@@ -393,3 +453,405 @@ def api_interview_data(iid: str):
         return jsonify({"error": "不存在"}), 404
     return jsonify({"interview": iv, "qas": repository.list_qa(iid),
                     "categories": repository.list_categories()})
+
+
+# ---------- 设置（Phase 5 / FR-05） ----------
+
+def _settings_payload() -> dict:
+    settings = settings_store.load()
+    return {"settings": settings, "masked_key": settings_store.masked_key(),
+            "has_api_key": config.has_llm(), "ai_mode": config.ai_mode(),
+            "extractor_mode": config.extractor_mode(), "extractor_label": config.extractor_label(),
+            "mode_badge": config.mode_badge(),
+            "base_url_effective": config.llm_base_url(), "model_effective": config.llm_model(),
+            "data_dir": settings_store.data_dir()}
+
+
+@app.route("/settings")
+def page_settings():
+    return render_template("settings.html", **_settings_payload(),
+                           data_stats=repository.dashboard_stats(),
+                           entry_stats=repository.entry_stats(),
+                           export_count=len(list(EXPORT_DIR.glob("*.md"))) if EXPORT_DIR.exists() else 0,
+                           db_size_kb=round(DB_PATH.stat().st_size / 1024, 1) if DB_PATH.exists() else 0,
+                           themes=settings_store.THEMES, ai_modes=settings_store.AI_MODES)
+
+
+@app.route("/api/settings")
+def api_get_settings():
+    return jsonify(_settings_payload())
+
+
+@app.route("/api/settings", methods=["POST"])
+def api_save_settings():
+    data = request.get_json(silent=True) or {}
+    patch: dict = {}
+    llm_patch: dict = {}
+    if "theme" in data:
+        theme = str(data["theme"] or "").strip()
+        if theme not in settings_store.THEMES:
+            return jsonify({"error": "主题取值非法（light/dark/system）"}), 400
+        patch["theme"] = theme
+    if "ai_mode" in data:
+        mode = str(data["ai_mode"] or "").strip()
+        if mode not in settings_store.AI_MODES:
+            return jsonify({"error": "AI 模式取值非法（auto/on/off）"}), 400
+        patch["ai_mode"] = mode
+    if "base_url" in data:
+        llm_patch["base_url"] = str(data["base_url"] or "").strip()
+    if "model" in data:
+        llm_patch["model"] = str(data["model"] or "").strip()
+    if llm_patch:
+        patch["llm"] = llm_patch
+    if not patch:
+        return jsonify({"error": "没有需要保存的设置"}), 400
+    settings_store.save(patch)          # 立即生效：后续请求按新设置解析提取器
+    return jsonify({"ok": True, **_settings_payload()})
+
+
+@app.route("/api/settings/api-key", methods=["POST"])
+def api_save_api_key():
+    data = request.get_json(silent=True) or {}
+    if "api_key" not in data:
+        return jsonify({"error": "缺少 api_key 字段"}), 400
+    settings_store.set_api_key(str(data.get("api_key") or ""))
+    return jsonify({"ok": True, "masked_key": settings_store.masked_key(),
+                    "has_api_key": config.has_llm(),
+                    "extractor_mode": config.extractor_mode(),
+                    "mode_badge": config.mode_badge()})
+
+
+@app.route("/api/settings/test", methods=["POST"])
+def api_test_llm():
+    """「测试连接」：用表单里的临时值或已保存值做一次最小请求。"""
+    data = request.get_json(silent=True) or {}
+    result = llm_mod.test_connection(
+        api_key=data.get("api_key") or None,
+        base_url=data.get("base_url") or None,
+        model=data.get("model") or None,
+    )
+    return jsonify(result), (200 if result.get("ok") else 400)
+
+
+@app.route("/api/settings/reset", methods=["POST"])
+def api_reset_settings():
+    settings_store.reset()
+    return jsonify({"ok": True, **_settings_payload()})
+
+
+# ---------- 知识库 / 相似关联（Phase 6） ----------
+
+@app.route("/api/knowledge/recompute", methods=["POST"])
+def api_knowledge_recompute():
+    """重算相似关联；AI 模式下对灰区做批量 LLM 判定。"""
+    data = request.get_json(silent=True) or {}
+    use_ai = data.get("use_ai")
+    use_ai = None if use_ai is None else bool(use_ai)
+    result = similar.recompute(use_ai=use_ai)
+    return jsonify({"ok": True, "similar_pairs": repository.similar_pair_count(), **result})
+
+
+@app.route("/api/knowledge/reclassify", methods=["POST"])
+def api_knowledge_reclassify():
+    """按最新规则重算所有条目的专题/一级分类。"""
+    count = 0
+    for e in repository.list_entries():
+        topic, group = knowledge.classify(e.get("head_question", ""), e.get("category_name", ""),
+                                          e.get("category_type", ""))
+        repository.set_entry_classification(e["id"], topic, group)
+        count += 1
+    return jsonify({"ok": True, "entries": count})
+
+
+@app.route("/api/entries/<entry_id>/best", methods=["POST"])
+def api_entry_best(entry_id: str):
+    data = request.get_json(silent=True) or {}
+    qa_id = (data.get("qa_id") or "").strip() or None
+    if not repository.get_entry(entry_id):
+        return jsonify({"error": "知识点条目不存在"}), 404
+    repository.set_entry_best_qa(entry_id, qa_id)
+    return jsonify({"ok": True, "best_qa_id": qa_id})
+
+
+@app.route("/api/entries/<entry_id>/update", methods=["POST"])
+def api_entry_update(entry_id: str):
+    data = request.get_json(silent=True) or {}
+    if not repository.get_entry(entry_id):
+        return jsonify({"error": "知识点条目不存在"}), 404
+    fields: dict = {}
+    if "optimization" in data:
+        fields["optimization"] = (data.get("optimization") or "").strip()
+    if "group_name" in data:
+        group = str(data.get("group_name") or "").strip()
+        if group not in knowledge.GROUPS:
+            return jsonify({"error": "一级分类取值非法"}), 400
+        fields["group_name"] = group
+    if "topic" in data:
+        topic = str(data.get("topic") or "").strip()
+        if topic and topic not in knowledge.TOPIC_KEYS:
+            return jsonify({"error": "专题取值非法"}), 400
+        fields["topic"] = topic or None
+    if not fields:
+        return jsonify({"error": "没有可更新的字段"}), 400
+    repository.update_entry(entry_id, fields)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/similar/confirm", methods=["POST"])
+def api_similar_confirm():
+    data = request.get_json(silent=True) or {}
+    a = (data.get("a_entry_id") or "").strip()
+    b = (data.get("b_entry_id") or "").strip()
+    score = float(data.get("score") or 0.8)
+    if not a or not b or a == b:
+        return jsonify({"error": "需要两个不同的条目 id"}), 400
+    repository.upsert_similar_pair(a, b, max(score, 0.8), "manual", "人工确认同一问题")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/similar/unlink", methods=["POST"])
+def api_similar_unlink():
+    data = request.get_json(silent=True) or {}
+    a = (data.get("a_entry_id") or "").strip()
+    b = (data.get("b_entry_id") or "").strip()
+    if not a or not b:
+        return jsonify({"error": "缺少条目 id"}), 400
+    repository.delete_similar_pair(a, b)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/knowledge/search", methods=["GET", "POST"])
+def api_knowledge_search():
+    """相似候选搜索：给定文本，返回最相似的已有条目（供"手动关联"用）。"""
+    text = (request.args.get("q") or "").strip()
+    if not text:
+        text = str((request.get_json(silent=True) or {}).get("q") or "").strip()
+    if not text:
+        return jsonify({"error": "请输入要检索的问题文本"}), 400
+    scored = []
+    for e in repository.list_entries():
+        s = similar.rule_score(text, e.get("head_question", ""))
+        for v in (e.get("question_variants") or []):
+            s = max(s, similar.rule_score(text, v))
+        if s >= 0.3:
+            scored.append({"entry_id": e["id"], "head_question": e["head_question"],
+                           "group_name": e.get("group_name"), "score": round(s, 3)})
+    scored.sort(key=lambda x: -x["score"])
+    return jsonify({"items": scored[:8]})
+
+
+# ---------- 简历（Phase 7） ----------
+
+@app.route("/api/resumes", methods=["POST"])
+def api_create_resume():
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "我的简历").strip()
+    try:
+        if data.get("data_url"):
+            raw = resume_mod.decode_data_url(data["data_url"])
+            text = resume_mod.extract_text(name, raw)
+        else:
+            text = (data.get("content") or "").strip()
+            if not text:
+                return jsonify({"error": "请上传文件（.txt/.md/.docx）或粘贴简历文本"}), 400
+    except resume_mod.ResumeError as e:
+        return jsonify({"error": str(e)}), 400
+    kw = resume_mod.parse_keywords(text)
+    rid = repository.create_resume(name, text, kw["skills"], kw["projects"])
+    return jsonify({"ok": True, "resume_id": rid, "name": name,
+                    "skills": kw["skills"], "projects": kw["projects"], "years": kw["years"],
+                    "chars": len(text)})
+
+
+@app.route("/api/resumes")
+def api_list_resumes():
+    items = []
+    for r in repository.list_resumes():
+        items.append({"id": r["id"], "name": r["name"], "skills": r["skills"],
+                      "projects": r["projects"], "chars": len(r["content_text"] or ""),
+                      "updated_at": r["updated_at"]})
+    return jsonify({"items": items})
+
+
+@app.route("/api/resumes/<rid>", methods=["POST"])
+def api_update_resume(rid: str):
+    if not repository.get_resume(rid):
+        return jsonify({"error": "简历不存在"}), 404
+    data = request.get_json(silent=True) or {}
+    skills = data.get("skills")
+    projects = data.get("projects")
+    if isinstance(skills, str):
+        skills = [s.strip() for s in skills.replace("，", ",").split(",") if s.strip()]
+    if isinstance(projects, str):
+        projects = [s.strip() for s in projects.replace("，", ",").split(",") if s.strip()]
+    repository.update_resume(rid, name=(data.get("name") or None), skills=skills, projects=projects)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/resumes/<rid>/delete", methods=["POST"])
+def api_delete_resume(rid: str):
+    repository.delete_resume(rid)
+    return jsonify({"ok": True})
+
+
+# ---------- 模拟面试（Phase 7） ----------
+
+@app.route("/mock")
+def page_mock_setup():
+    return render_template("mock_setup.html",
+                           interviews=repository.list_interviews(),
+                           resumes=repository.list_resumes(),
+                           sessions=repository.list_mock_sessions()[:10],
+                           bank_stats=repository.entry_stats(),
+                           ai_available=config.extractor_mode() == "deepseek",
+                           tts_providers=_tts_providers())
+
+
+@app.route("/api/mock/sessions", methods=["POST"])
+def api_create_mock_session():
+    data = request.get_json(silent=True) or {}
+    mode = str(data.get("mode") or "bank")
+    if mode not in ("whole", "bank", "resume"):
+        return jsonify({"error": "模拟模式取值非法"}), 400
+    interview_id = (data.get("interview_id") or "").strip() or None
+    resume_id = (data.get("resume_id") or "").strip() or None
+    try:
+        generated = mock_gen.build_questions(
+            mode=mode, interview_id=interview_id, resume_id=resume_id,
+            count=int(data.get("count") or 8), shuffle=bool(data.get("shuffle")),
+            include_follow_up=bool(data.get("include_follow_up")),
+            ai_ratio=float(data.get("ai_ratio") or 0.4),
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    questions = generated["questions"]
+    if not questions:
+        return jsonify({"error": "没有生成任何题目，请检查题库/面试记录或简历内容"}), 400
+
+    if mode == "whole" and interview_id:
+        iv = repository.get_interview(interview_id)
+        title = f"整场模拟 · {iv['title'] if iv else interview_id}"
+    elif mode == "resume" and resume_id:
+        rv = repository.get_resume(resume_id)
+        title = f"简历模拟 · {rv['name'] if rv else '简历'}"
+    else:
+        title = "题库随机模拟"
+
+    cfg = {"count": len(questions), "shuffle": bool(data.get("shuffle")),
+           "include_follow_up": bool(data.get("include_follow_up")),
+           "ai_ratio": float(data.get("ai_ratio") or 0.4),
+           "tts": str(data.get("tts") or "web"),
+           "note": generated.get("note") or ""}
+    sid = repository.create_mock_session(title, mode, cfg, interview_id, resume_id)
+    for i, q in enumerate(questions, start=1):
+        q["session_id"] = sid
+        q["seq"] = i
+        repository.insert_mock_turn(q)
+    repository.update_mock_session(sid, question_count=len(questions))
+    return jsonify({"ok": True, "session_id": sid, "title": title,
+                    "question_count": len(questions), "ai_used": generated["ai_used"],
+                    "bank_used": generated["bank_used"], "note": generated.get("note") or ""})
+
+
+@app.route("/mock/<sid>")
+def page_mock_run(sid: str):
+    session = repository.get_mock_session(sid)
+    if not session:
+        abort(404)
+    turns = repository.list_mock_turns(sid)
+    index = request.args.get("i")
+    idx = int(index) - 1 if (index or "").isdigit() else 0
+    idx = max(0, min(idx, max(len(turns) - 1, 0)))
+    current = turns[idx] if turns else None
+    answered = sum(1 for t in turns if (t.get("my_answer") or "").strip() or t.get("mark"))
+    return render_template("mock_run.html", session=session, turns=turns, current=current,
+                           idx=idx, answered=answered,
+                           edge_tts_available=_edge_tts_available())
+
+
+@app.route("/api/mock/turns/<tid>", methods=["POST"])
+def api_save_mock_turn(tid: str):
+    turn = repository.get_mock_turn(tid)
+    if not turn:
+        return jsonify({"error": "题目不存在"}), 404
+    data = request.get_json(silent=True) or {}
+    fields: dict = {}
+    if "my_answer" in data:
+        fields["my_answer"] = str(data.get("my_answer") or "")
+    if "elapsed_sec" in data:
+        try:
+            fields["elapsed_sec"] = int(data.get("elapsed_sec") or 0)
+        except (TypeError, ValueError):
+            fields["elapsed_sec"] = None
+    if "mark" in data:
+        mark = str(data.get("mark") or "").strip() or None
+        if mark not in (None, "good", "unsure", "blank"):
+            return jsonify({"error": "标记取值非法"}), 400
+        fields["mark"] = mark
+    repository.update_mock_turn(tid, fields)
+    session_id = turn["session_id"]
+    turns = repository.list_mock_turns(session_id)
+    answered = sum(1 for t in turns if (t.get("my_answer") or "").strip() or t.get("mark"))
+    repository.update_mock_session(session_id, answered_count=answered)
+    return jsonify({"ok": True, "answered": answered, "total": len(turns)})
+
+
+@app.route("/api/mock/sessions/<sid>/finish", methods=["POST"])
+def api_finish_mock_session(sid: str):
+    session = repository.get_mock_session(sid)
+    if not session:
+        return jsonify({"error": "模拟会话不存在"}), 404
+    from .util import now as _now
+    turns = repository.list_mock_turns(sid)
+    answered = sum(1 for t in turns if (t.get("my_answer") or "").strip() or t.get("mark"))
+    repository.update_mock_session(sid, status="finished", answered_count=answered,
+                                   finished_at=_now())
+    return jsonify({"ok": True, "answered": answered, "total": len(turns)})
+
+
+@app.route("/api/mock/sessions/<sid>/delete", methods=["POST"])
+def api_delete_mock_session(sid: str):
+    repository.delete_mock_session(sid)
+    return jsonify({"ok": True})
+
+
+@app.route("/mock/<sid>/report")
+def page_mock_report(sid: str):
+    session = repository.get_mock_session(sid)
+    if not session:
+        abort(404)
+    turns = repository.list_mock_turns(sid)
+    entries = {e["id"]: e for e in repository.list_entries()}
+    total_sec = sum(int(t.get("elapsed_sec") or 0) for t in turns)
+    answered = [t for t in turns if (t.get("my_answer") or "").strip()]
+    weak = [t for t in turns if t.get("mark") in ("unsure", "blank") or not (t.get("my_answer") or "").strip()]
+    by_group: dict[str, int] = {}
+    for t in turns:
+        e = entries.get(t.get("reference_entry_id") or "")
+        group = (e or {}).get("group_name") or "未归类"
+        by_group[group] = by_group.get(group, 0) + 1
+    return render_template("mock_report.html", session=session, turns=turns, entries=entries,
+                           total_sec=total_sec, answered_count=len(answered), weak=weak,
+                           by_group=sorted(by_group.items(), key=lambda x: -x[1]))
+
+
+def _tts_providers() -> dict:
+    """可用的语音方案探测：浏览器内置（始终可用）/ edge-tts / piper（开源本地）。"""
+    import importlib.util
+    import shutil
+    return {
+        "web": True,
+        "none": True,
+        "edge": importlib.util.find_spec("edge_tts") is not None,
+        "piper": shutil.which("piper") is not None,
+    }
+
+
+def _edge_tts_available() -> bool:
+    return bool(_tts_providers().get("edge"))
+
+
+@app.route("/api/tts/status")
+def api_tts_status():
+    return jsonify(_tts_providers())

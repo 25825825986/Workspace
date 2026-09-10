@@ -76,7 +76,7 @@
       </div>
       <div class="qa-actions">
         <button class="btn small" data-toggle-answer="{{ q.id }}">隐藏答案</button>
-        <a class="btn small" href="/interviews/{{ iv.id }}/qa/{{ q.id }}">复盘</a>
+        <a class="btn small primary" href="/interviews/{{ iv.id }}/qa/{{ q.id }}">复盘</a>
         {% if not q.entry_id %}
           {% if q.status in ('auto','pending') %}
           <button class="btn small" data-post="/api/qa/{{ q.id }}/confirm">确认</button>
@@ -84,11 +84,16 @@
           <button class="btn small" data-post="/api/qa/{{ q.id }}/merge">入库</button>
           {% endif %}
         {% endif %}
-        <button class="btn small" data-post="/api/qa/{{ q.id }}/merge-next"
-                data-confirm="将下一条问答合并到本条（用于修正被误拆的问答）？">合并下一条</button>
-        <button class="btn small" data-split="/api/qa/{{ q.id }}/split" data-answers="{{ q.answers|length }}">拆分</button>
-        <button class="btn small danger" data-post="/api/qa/{{ q.id }}/delete"
-                data-confirm="删除这条问答（保留在数据库中可审计，列表中不再显示）？">删除</button>
+        <details class="more">
+          <summary class="btn small">更多校对</summary>
+          <div class="more-body">
+            <button class="btn small" data-post="/api/qa/{{ q.id }}/merge-next"
+                    data-confirm="将下一条问答合并到本条（用于修正被误拆的问答）？">合并下一条</button>
+            <button class="btn small" data-split="/api/qa/{{ q.id }}/split" data-answers="{{ q.answers|length }}">拆分</button>
+            <button class="btn small danger" data-post="/api/qa/{{ q.id }}/delete"
+                    data-confirm="删除这条问答（保留在数据库中可审计，列表中不再显示）？">删除</button>
+          </div>
+        </details>
       </div>
     </div>
     <div class="qa-answer" data-answer-of="{{ q.id }}">

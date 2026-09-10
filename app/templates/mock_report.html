@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}模拟报告 · {{ session.title }}{% endblock %}
+
+{% block content %}
+<nav class="crumbs"><a href="/mock">模拟面试</a> / 报告</nav>
+
+<section class="page-head">
+  <div>
+    <h1>{{ session.title }} · 模拟报告</h1>
+    <p class="muted small">
+      模式：{{ {'whole': '整场复盘', 'bank': '题库随机', 'resume': '简历+AI'}.get(session.mode, session.mode) }}
+      ｜ 开始：{{ (session.started_at or '')[:16] }}
+      {% if session.finished_at %}｜ 结束：{{ session.finished_at[:16] }}{% endif %}
+    </p>
+  </div>
+  <div class="ops">
+    <a class="btn" href="/mock/{{ session.id }}">返回继续作答</a>
+    <a class="btn primary" href="/mock">再来一轮</a>
+  </div>
+</section>
+
+<section class="stats-row">
+  <div class="stat"><b>{{ turns|length }}</b><span>题目数</span></div>
+  <div class="stat"><b>{{ answered_count }}</b><span>已作答</span></div>
+  <div class="stat"><b>{{ (total_sec // 60) }}′{{ '%02d' % (total_sec % 60) }}</b><span>作答总时长</span></div>
+  <div class="stat"><b>{{ weak|length }}</b><span>需要加强</span></div>
+</section>
+
+{% if by_group %}
+<section class="card">
+  <h2>本轮考点分布</h2>
+  <p>
+    {% for name, n in by_group %}
+    <span class="chip">{{ name }} × {{ n }}</span>
+    {% endfor %}
+  </p>
+</section>
+{% endif %}
+
+{% if weak %}
+<section class="card">
+  <h2>需要加强的题目 <span class="muted small">（标记"不确定/不会"或未作答）</span></h2>
+  <table class="tbl">
+    <thead><tr><th>#</th><th>问题</th><th>标记</th><th>建议</th></tr></thead>
+    <tbody>
+    {% for t in weak %}
+      <tr>
+        <td>{{ t.seq }}</td>
+        <td>{{ t.question_text }}</td>
+        <td><span class="chip s-pending">{{ {'unsure': '不确定', 'blank': '不会'}.get(t.mark, '未作答') }}</span></td>
+        <td class="ops">
+          {% if t.reference_entry_id %}
+          <a class="btn small" href="/knowledge/compare/{{ t.reference_entry_id }}">看知识库对比</a>
+          {% else %}<span class="muted small">AI 生成题：可在知识库手动沉淀</span>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>逐题对照</h2>
+  {% for t in turns %}
+  <div class="entry">
+    <div class="between">
+      <b>#{{ t.seq }} {{ t.question_text }}</b>
+      <span class="muted small">
+        {{ {'whole': '原场题目', 'bank': '题库抽题', 'ai': 'AI 生成'}.get(t.source, t.source) }}
+        {% if t.is_follow_up %}· 追问{% endif %}
+        {% if t.elapsed_sec %}· 用时 {{ t.elapsed_sec }}s{% endif %}
+        {% if t.mark %}· 标记 {{ {'good': '掌握', 'unsure': '不确定', 'blank': '不会'}.get(t.mark, t.mark) }}{% endif %}
+      </span>
+    </div>
+    <div class="duo-mini">
+      <div class="b-col">
+        <p class="tagline">我的回答</p>
+        <p class="verbatim small">{{ t.my_answer or '（未作答）' }}</p>
+      </div>
+      <div class="b-col">
+        <p class="tagline">参考要点</p>
+        {% if t.reference_answer %}<p class="verbatim small">{{ t.reference_answer }}</p>{% endif %}
+        <p class="small">{{ t.reference_tips or '（无）' }}</p>
+        {% if t.reference_entry_id %}
+        <p class="small"><a href="/knowledge/compare/{{ t.reference_entry_id }}">知识库对比 →</a></p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</section>
+
+<section class="card">
+  <h2>下一步建议</h2>
+  <ul class="small">
+    <li>把"不确定/不会"的题目回到知识库补齐<b>优化建议</b>（只写改进方向，不改写历史原文）。</li>
+    <li>对高频考点（被问次数多）优先准备：进入知识库按「被问次数」排序查看。</li>
+    <li>下一轮可以切到「整场面试复盘」模式，用真实面试的原题顺序再练一遍。</li>
+  </ul>
+</section>
+{% endblock %}

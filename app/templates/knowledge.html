@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}知识库 · AI_Review{% endblock %}
+
+{% macro entry_card(e) %}
+<div class="entry">
+  <div class="between">
+    <div class="entry-main">
+      <b class="entry-q">{{ e.head_question }}</b>
+      {% if e.question_variants %}<span class="muted small">＋{{ e.question_variants|length }} 种变体问法</span>{% endif %}
+      {% if e.best_qa_id %}<span class="chip">已标最佳</span>{% endif %}
+    </div>
+    <div class="ops">
+      <span class="muted small">被问 <b>{{ e.ask_times }}</b> 次 · 出处 {{ e.source_interview_count }} 场 ·
+        最近 {{ (e.last_asked_at or '')[:10] or '-' }}</span>
+      {% if e.similar_confirmed %}
+      <a class="chip chip-link" href="/knowledge/compare/{{ e.id }}">相似 {{ e.similar_confirmed }} 条 →</a>
+      {% elif e.similar_suspected %}
+      <a class="chip chip-link s-pending" href="/knowledge/compare/{{ e.id }}">疑似相似 {{ e.similar_suspected }} 条 →</a>
+      {% else %}
+      <a class="chip chip-link" href="/knowledge/compare/{{ e.id }}">查看对比 →</a>
+      {% endif %}
+    </div>
+  </div>
+  <div class="duo-mini">
+    <div class="b-col">
+      <p class="tagline">忠实核心答案（原文，只读）</p>
+      <p class="verbatim small">{{ e.core_extract or '（暂无——请在某场复盘中确认并入库）' }}</p>
+    </div>
+    <div class="b-col">
+      <p class="tagline">优化建议（独立栏）</p>
+      <p class="small">{{ e.optimization or '（未填写——可在单题复盘的「优化建议」补充）' }}</p>
+    </div>
+  </div>
+</div>
+{% endmacro %}
+
+{% block head_extra %}
+<style>.topic-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:var(--sp-3)}
+.topic-card{border-top:3px solid var(--brand)}
+.chip-link:hover{text-decoration:none;background:var(--brand-soft);color:var(--brand);border-color:var(--brand-line)}
+.entry-q{font-size:15px}</style>
+{% endblock %}
+
+{% block content %}
+<section class="page-head">
+  <div>
+    <h1>知识库</h1>
+    <p class="muted">跨场累积：自我介绍 / 个人发展 / 反问环节单独总结，其余按一级分类归档；被问次数越多说明越常考。</p>
+  </div>
+  <div class="ops">
+    <button class="btn" id="btn-recompute" data-confirm=""
+            title="重算相似问题关联（{% if ai_available %}AI 模式：灰区会交模型判定{% else %}非 AI 模式：仅规则判定{% endif %}）">重算相似关联</button>
+    <button class="btn" id="btn-reclassify">重跑分类</button>
+    <a class="btn" href="/bank/export">导出预览</a>
+    <a class="btn primary" href="/download/bank.md">下载快照</a>
+  </div>
+</section>
+
+<div id="kb-msg" class="flash ok" style="display:none"></div>
+
+<section class="stats-row">
+  <div class="stat"><b>{{ stats.entries }}</b><span>知识点条目</span></div>
+  <div class="stat"><b>{{ stats.total_ask }}</b><span>累计被问次数</span></div>
+  <div class="stat"><b>{{ stats.categories }}</b><span>二级知识点</span></div>
+  <div class="stat"><b>{{ similar_pairs }}</b><span>相似关联</span></div>
+</section>
+
+<form class="toolbar card" method="get" action="/knowledge">
+  <input type="search" name="q" value="{{ search }}" placeholder="搜索问题 / 知识点 / 变体问法">
+  <button class="btn primary" type="submit">搜索</button>
+  {% if search %}<a class="btn" href="/knowledge">重置</a>{% endif %}
+  <span class="muted small">
+    相似判定：规则层阈值 0.72（灰区 0.55–0.72{% if ai_available %} 交 AI 判定{% else %} 仅提示，切换 AI 模式可判定{% endif %}）
+  </span>
+</form>
+
+{% if topics %}
+<section class="topic-grid">
+  {% for t in topics %}
+  <article class="card topic-card">
+    <h3>{{ t.label }} <span class="muted small">累计 {{ t.total_ask }} 次 · {{ t.entries|length }} 个知识点</span></h3>
+    <p class="muted small">{{ t.desc }}</p>
+    {% for e in t.entries %}{{ entry_card(e) }}{% endfor %}
+  </article>
+  {% endfor %}
+</section>
+{% endif %}
+
+{% for g in groups %}
+<section class="card">
+  <h3>{{ g.name }}
+    <span class="muted small">累计被问 {{ g.total_ask }} 次 · {{ g.entries|length }} 个知识点</span>
+  </h3>
+  {% for e in g.entries %}{{ entry_card(e) }}{% endfor %}
+</section>
+{% endfor %}
+
+{% if not groups and not topics %}
+<section class="card empty-state">
+  {% if search %}
+  <p>没有匹配的知识点。</p><a class="btn" href="/knowledge">清除搜索</a>
+  {% else %}
+  <p>知识库还是空的：在「面试记录」里确认题目后点「入库」，条目会按知识点自动累积到这里。</p>
+  <a class="btn primary" href="/">去面试记录</a>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function showMsg(text){ const b=document.getElementById('kb-msg'); b.textContent=text; b.style.display='block'; window.scrollTo(0,0); }
+
+document.getElementById('btn-recompute').addEventListener('click', async function(){
+  this.disabled = true; showMsg('正在重算相似关联…');
+  try {
+    const d = await postJSON('/api/knowledge/recompute', {});
+    showMsg(`完成：候选 ${d.candidate_pairs} 对，命中相似 ${d.rule_matched} 对，灰区 ${d.gray_pairs} 对`
+      + (d.ai_available ? `，AI 判定 ${d.ai_judged} 对（确认 ${d.ai_confirmed}）` : '（非 AI 模式：灰区仅提示）'));
+    setTimeout(() => location.reload(), 1200);
+  } catch (e) { showMsg('失败：' + e.message); this.disabled = false; }
+});
+
+document.getElementById('btn-reclassify').addEventListener('click', async function(){
+  this.disabled = true;
+  try {
+    const d = await postJSON('/api/knowledge/reclassify', {});
+    showMsg(`已按最新规则重新分类 ${d.entries} 个知识点`);
+    setTimeout(() => location.reload(), 900);
+  } catch (e) { showMsg('失败：' + e.message); this.disabled = false; }
+});
+</script>
+{% endblock %}

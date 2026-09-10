@@ -17,7 +17,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..config import LLM_API_KEY, extractor_mode
+from .. import config
+from .. import knowledge
 from . import llm as llm_mod
 from . import preprocess
 
@@ -65,25 +66,62 @@ class RuleExtractor(BaseExtractor):
     def extract(self, turns: list[dict], role_of: dict[str, str]) -> list[dict]:
         items: list[dict] = []
         cur: dict | None = None
+        invite: dict | None = None      # 面试官"你有什么想问我们的吗"（仅在没有后续提问时才保留成题）
+        in_reverse = False              # 刚发出邀请，等待"我提问"
+        reverse_open = False            # 已抓到"我提问"，等待面试官回答
+
+        def close(item: dict | None) -> None:
+            if item is None:
+                return
+            if not item["answers"]:
+                item["confidence"] = 0.5
+            items.append(item)
+
         for t in turns:
             role = role_of.get(t["label"], "unknown")
+            text = t["text"]
             if role == "interviewer":
-                # Phase 4 修复：上一问即使没有回答也保留（连续追问/未作答不再静默丢失），
-                # 置信度降到 0.5 → 由后处理标记为 pending 供人工确认。
-                if cur is not None:
-                    if not cur["answers"]:
-                        cur["confidence"] = 0.5
-                    items.append(cur)
-                cur = {"q_text": t["text"], "q_turn": t["idx"], "answers": [],
-                       "category": suggest_category(t["text"]), "confidence": 0.9,
-                       "note": None}
-            elif role == "self" and cur:
-                cur["answers"].append({"text": t["text"], "turn": t["idx"]})
+                if reverse_open and cur is not None and cur.get("direction") == "reverse":
+                    # 面试官在回答我的提问 → 记为该反问的回答
+                    cur["answers"].append({"text": text, "turn": t["idx"]})
+                    reverse_open = False
+                    close(cur)
+                    cur = None
+                    in_reverse = False
+                    continue
+                close(cur)
+                if invite is not None:
+                    close(invite)       # 邀请之后面试官又发言 → 邀请按"未作答问题"保留
+                    invite = None
+                in_reverse = False
+                cur = {"q_text": text, "q_turn": t["idx"], "answers": [],
+                       "category": suggest_category(text), "confidence": 0.9,
+                       "note": None, "direction": "normal"}
+                if knowledge.is_reverse_invite(text):
+                    # 邀请本身不是"待回答的问题"：暂存，等待候选人提问
+                    invite = cur
+                    cur = None
+                    in_reverse = True
+            elif role == "self":
+                if in_reverse:
+                    # 候选人提问 → 建立反转向条目（邀请话术不再单独成题）
+                    invite = None
+                    close(cur)
+                    cur = {"q_text": text, "q_turn": t["idx"], "answers": [],
+                           "category": "反问环节", "confidence": 0.85,
+                           "note": None, "direction": "reverse"}
+                    in_reverse = False
+                    reverse_open = True
+                elif reverse_open and cur is not None:
+                    # 反问后我又补充说明 → 并入问题文本（仍是逐字原文）
+                    cur["q_text"] = f"{cur['q_text']}\n{text}"
+                elif cur is not None and cur.get("direction") != "reverse":
+                    cur["answers"].append({"text": text, "turn": t["idx"]})
+                else:
+                    continue            # 候选人先于任何提问发言（寒暄）：忽略
             # 其他/未知角色轮次：噪音，跳过
-        if cur is not None:
-            if not cur["answers"]:
-                cur["confidence"] = 0.5
-            items.append(cur)
+        close(cur)
+        close(invite)                   # 面试全程没有提问环节 → 邀请作为待确认条目保留
         return items
 
 
@@ -144,6 +182,9 @@ class DeepSeekExtractor(BaseExtractor):
                     "category": str(it.get("category") or "").strip() or None,
                     "confidence": float(it.get("confidence") or 0.5),
                     "note": str(it.get("note") or "").strip() or None,
+                    "direction": (str(it.get("direction") or "normal").strip().lower()
+                                  if str(it.get("direction") or "").strip().lower() in ("normal", "reverse")
+                                  else "normal"),
                 })
         if not items:
             raise llm_mod.LLMError("LLM 未提取到任何问答，请检查文本或稍后重试")
@@ -151,7 +192,7 @@ class DeepSeekExtractor(BaseExtractor):
 
 
 def make_extractor(mode: str | None = None) -> BaseExtractor:
-    mode = mode or extractor_mode()
+    mode = mode or config.extractor_mode()
     if mode == "deepseek":
         return DeepSeekExtractor()
     if mode == "mock":
@@ -160,13 +201,9 @@ def make_extractor(mode: str | None = None) -> BaseExtractor:
 
 
 def describe() -> str:
-    if extractor_mode() == "deepseek":
-        from ..config import LLM_MODEL
-        return f"DeepSeek({LLM_MODEL})"
-    if extractor_mode() == "mock":
-        return "内置 Mock（规则实现，模拟 LLM）"
-    return "规则切分"
+    """当前提取方式的可读描述（跟随设置页实时变化）。"""
+    return config.extractor_label()
 
 
 def has_llm() -> bool:
-    return bool(LLM_API_KEY)
+    return config.has_llm()

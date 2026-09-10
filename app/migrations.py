@@ -20,6 +20,11 @@ TARGET_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("direction", "TEXT NOT NULL DEFAULT 'normal'"),
         ("deleted", "INTEGER NOT NULL DEFAULT 0"),
     ],
+    "entries": [
+        ("topic", "TEXT"),
+        ("group_name", "TEXT"),
+        ("best_qa_id", "TEXT"),
+    ],
 }
 
 

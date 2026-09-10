@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+{% block title %}设置 · AI_Review{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <h1>设置</h1>
+    <p class="muted">主题外观、AI 模式与模型接入。所有设置保存在本机 <code>{{ data_dir }}</code>，改完立即生效（无需重启）。</p>
+  </div>
+  <span class="mode-badge {{ mode_badge.kind }}">{{ mode_badge.text }}</span>
+</section>
+
+<div id="msg" class="flash ok" style="display:none"></div>
+<div id="err" class="flash err" style="display:none"></div>
+
+<section class="card">
+  <h2>① 主题外观</h2>
+  <p class="muted small">选择后立即生效并持久保存；「跟随系统」会随操作系统的深浅色设置自动切换。</p>
+  <div class="choice-row" id="theme-group">
+    {% for t, label in [('light', '浅色'), ('dark', '深色'), ('system', '跟随系统')] %}
+    <label class="choice">
+      <input type="radio" name="theme" value="{{ t }}" {{ 'checked' if settings.theme == t else '' }}>
+      <span>{{ label }}</span>
+    </label>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="card">
+  <h2>② AI 模式</h2>
+  <p class="muted small">
+    当前解析方式：<b>{{ extractor_label }}</b>。
+    「非 AI 模式」完全离线，只用规则切分与本地判定；需要 AI 抽取/推断时请选择「自动」或「强制 AI」并配置 API Key。
+  </p>
+  <div class="choice-row" id="ai-mode-group">
+    {% for m, label, desc in [('auto', '自动', '有 API Key 时用 AI，无 Key 时自动回退规则'),
+                              ('on', '强制 AI', '始终调用大模型（未配置 Key 会明确报错）'),
+                              ('off', '非 AI 模式', '纯本地规则，不联网')] %}
+    <label class="choice">
+      <input type="radio" name="ai_mode" value="{{ m }}" {{ 'checked' if settings.ai_mode == m else '' }}>
+      <span>{{ label }}<i class="muted small">{{ desc }}</i></span>
+    </label>
+    {% endfor %}
+  </div>
+  {% if not has_api_key and settings.ai_mode != 'off' %}
+  <p class="hint warn-text">当前尚未配置 API Key，AI 模式会回退为规则切分。</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>③ 模型 API</h2>
+  <p class="muted small">OpenAI 兼容协议。留空则使用 <code>.env</code> 或内置默认（默认地址 {{ base_url_effective }}）。</p>
+  <div class="grid2">
+    <label>Base URL <input id="f-base-url" value="{{ settings.llm.base_url }}" placeholder="{{ base_url_effective }}"></label>
+    <label>模型名 <input id="f-model" value="{{ settings.llm.model }}" placeholder="{{ model_effective }}"></label>
+  </div>
+  <label>API Key
+    <span class="row-inline">
+      <input id="f-api-key" type="password" autocomplete="off"
+             placeholder="{% if masked_key %}已保存：{{ masked_key }}（留空则不修改）{% else %}未配置，如 sk-xxxx{% endif %}">
+      <button class="btn small" type="button" id="btn-clear-key">清除 Key</button>
+    </span>
+    <span class="hint">Key 仅保存在本机 <code>data/secrets.json</code>，界面只显示掩码；不会写入代码或提交到 git。</span>
+  </label>
+  <div class="row">
+    <button class="btn primary" id="btn-save">保存设置</button>
+    <button class="btn" id="btn-test">测试连接</button>
+    <button class="btn" id="btn-reset">恢复默认</button>
+    <span class="muted small" id="test-result"></span>
+  </div>
+</section>
+
+<section class="card">
+  <h2>④ 数据信息</h2>
+  <div class="stats-row">
+    <div class="stat"><b>{{ data_stats.interviews }}</b><span>面试场次</span></div>
+    <div class="stat"><b>{{ data_stats.qa_total }}</b><span>题目总数</span></div>
+    <div class="stat"><b>{{ entry_stats.entries }}</b><span>知识库条目</span></div>
+    <div class="stat"><b>{{ export_count }}</b><span>导出文件</span></div>
+  </div>
+  <p class="muted small">
+    数据目录：<code>{{ data_dir }}</code> ｜ 数据库大小：约 {{ db_size_kb }} KB<br>
+    备份方式：直接复制 <code>data/</code> 整个目录（含数据库、原文存档、导出文件与设置）。
+  </p>
+</section>
+
+<section class="card">
+  <h2>⑤ 关于</h2>
+  <p class="muted small">
+    版本 v{{ app_version }} ｜ 解析方式：{{ extractor_label }} ｜ AI 模式：{{ ai_mode }} ｜
+    API Key：{{ '已配置' if has_api_key else '未配置' }}<br>
+    设计文档：<code>docs/04-requirements-spec.md</code>（需求）、<code>docs/06-phase4-delivery.md</code>（上一阶段交付）。
+  </p>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const $ = (id) => document.getElementById(id);
+function showMsg(text) {
+  const b = $('msg'); b.textContent = text; b.style.display = 'block';
+  $('err').style.display = 'none'; window.scrollTo(0, 0);
+}
+function showErr(text) {
+  const b = $('err'); b.textContent = text; b.style.display = 'block';
+  $('msg').style.display = 'none'; window.scrollTo(0, 0);
+}
+function applyTheme(theme) {
+  const el = document.documentElement;
+  if (theme === 'system') {
+    el.removeAttribute('data-theme');
+    const dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    el.setAttribute('data-theme', dark ? 'dark' : 'light');
+  } else {
+    el.setAttribute('data-theme', theme);
+  }
+}
+
+// 主题单选：立即预览（保存由「保存设置」统一提交）
+document.querySelectorAll('input[name=theme]').forEach(r => {
+  r.addEventListener('change', () => applyTheme(r.value));
+});
+
+$('btn-save').addEventListener('click', async () => {
+  const theme = document.querySelector('input[name=theme]:checked').value;
+  const aiMode = document.querySelector('input[name=ai_mode]:checked').value;
+  try {
+    const data = await postJSON('/api/settings', {
+      theme, ai_mode: aiMode,
+      base_url: $('f-base-url').value, model: $('f-model').value,
+    });
+    const key = $('f-api-key').value.trim();
+    if (key) {
+      await postJSON('/api/settings/api-key', {api_key: key});
+      $('f-api-key').value = '';
+    }
+    showMsg('已保存：' + data.mode_badge.text + '（主题：' + theme + '）');
+    setTimeout(() => location.reload(), 600);
+  } catch (e) { showErr(e.message); }
+});
+
+$('btn-clear-key').addEventListener('click', async () => {
+  if (!confirm('确定清除已保存的 API Key？清除后将回退为规则解析（除非 .env 中另有配置）。')) return;
+  try {
+    await postJSON('/api/settings/api-key', {api_key: ''});
+    showMsg('API Key 已清除。');
+    setTimeout(() => location.reload(), 600);
+  } catch (e) { showErr(e.message); }
+});
+
+$('btn-test').addEventListener('click', async () => {
+  const info = $('test-result');
+  info.textContent = '测试中…';
+  try {
+    const r = await fetch('/api/settings/test', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        api_key: $('f-api-key').value.trim() || null,
+        base_url: $('f-base-url').value.trim() || null,
+        model: $('f-model').value.trim() || null,
+      }),
+    });
+    const d = await r.json();
+    info.textContent = (d.ok ? '✅ ' : '⚠️ ') + (d.message || '');
+    info.classList.toggle('warn-text', !d.ok);
+  } catch (e) { info.textContent = '测试失败：' + e.message; }
+});
+
+$('btn-reset').addEventListener('click', async () => {
+  if (!confirm('恢复默认设置（主题=跟随系统、AI 模式=自动、模型参数清空）？API Key 不会被清除。')) return;
+  try {
+    await postJSON('/api/settings/reset', {});
+    showMsg('已恢复默认设置。');
+    setTimeout(() => location.reload(), 600);
+  } catch (e) { showErr(e.message); }
+});
+</script>
+{% endblock %}

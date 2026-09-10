@@ -153,14 +153,15 @@ def insert_qa(q: dict) -> str:
             """INSERT INTO qa_items
                (id,interview_id,seq,parent_id,status,q_text,q_speaker_id,q_source_ref,
                 q_confidence,q_is_corrected,q_corrected_text,answers,annotation,optimization,
-                category_id,entry_id,tag_ids,confidence,created_at,updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                category_id,entry_id,direction,tag_ids,confidence,created_at,updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (qid, q["interview_id"], q.get("seq", 0), q.get("parent_id"),
              q.get("status", "auto"), q.get("q_text", ""), q.get("q_speaker_id"),
              dumps(q.get("q_source_ref")), q.get("q_confidence"),
              1 if q.get("q_is_corrected") else 0, q.get("q_corrected_text"),
              _serialize_answers(q.get("answers", [])), q.get("annotation"),
              q.get("optimization"), q.get("category_id"), q.get("entry_id"),
+             q.get("direction") or "normal",
              dumps(q.get("tag_ids", [])), q.get("confidence"), ts, ts),
         )
         conn.commit()
@@ -423,18 +424,36 @@ def find_entry_by_question(category_id: str, question_norm: str) -> dict | None:
     return None
 
 
-def create_entry(category_id: str, head_question: str) -> dict:
+def create_entry(category_id: str, head_question: str,
+                 topic: str = "", group_name: str = "") -> dict:
     eid = uid()
     ts = now()
     with conn_ctx() as conn:
         conn.execute(
             """INSERT INTO entries (id,category_id,head_question,question_variants,core_extract,
-               optimization,source_qa_ids,ask_times,tag_ids,first_asked_at,last_asked_at,updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+               optimization,source_qa_ids,ask_times,topic,group_name,tag_ids,
+               first_asked_at,last_asked_at,updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (eid, category_id, head_question, dumps([]), None, None,
-             dumps([]), 0, dumps([]), None, None, ts))
+             dumps([]), 0, topic or None, group_name or None, dumps([]), None, None, ts))
         conn.commit()
     return get_entry(eid)  # type: ignore[return-value]
+
+
+def set_entry_classification(entry_id: str, topic: str, group_name: str) -> None:
+    """写入专题 / 一级分类（Phase 6）。"""
+    with conn_ctx() as conn:
+        conn.execute("UPDATE entries SET topic=?, group_name=?, updated_at=? WHERE id=?",
+                     (topic or None, group_name or None, now(), entry_id))
+        conn.commit()
+
+
+def set_entry_best_qa(entry_id: str, qa_id: str | None) -> None:
+    """人工标记「最佳作答」（Phase 6 对比页）。"""
+    with conn_ctx() as conn:
+        conn.execute("UPDATE entries SET best_qa_id=?, updated_at=? WHERE id=?",
+                     (qa_id or None, now(), entry_id))
+        conn.commit()
 
 
 def add_qa_to_entry(entry_id: str, qa: dict, source_qa_id: str) -> None:
@@ -522,7 +541,7 @@ def count_source_interviews(source_qa_ids: Iterable[str]) -> int:
 
 def update_entry(eid: str, fields: dict) -> None:
     allowed = {"core_extract", "optimization", "head_question", "question_variants",
-               "tag_ids", "category_id"}
+               "tag_ids", "category_id", "topic", "group_name", "best_qa_id"}
     sets = {k: v for k, v in fields.items() if k in allowed}
     if not sets:
         return
@@ -544,3 +563,251 @@ def entry_stats() -> dict:
         row2 = conn.execute("SELECT COUNT(*) AS n FROM interviews").fetchone()
     return {"entries": row["entry_count"], "total_ask": row["total_ask"],
             "categories": row["cat_count"], "interviews": row2["n"]}
+
+
+# ---------- 相似问题关联（Phase 6） ----------
+
+_QS_COLS = ("id", "score", "method", "reason", "created_at")
+
+
+def get_similar_pair(a_id: str, b_id: str) -> dict | None:
+    with conn_ctx() as conn:
+        row = conn.execute(
+            "SELECT * FROM similar_pairs WHERE a_entry_id=? AND b_entry_id=?",
+            (a_id, b_id)).fetchone()
+    return dict(row) if row else None
+
+
+def upsert_similar_pair(a_entry_id: str, b_entry_id: str, score: float,
+                        method: str, reason: str | None = None) -> None:
+    """写入/更新相似对；优先级 manual > ai > rule，低优先级不覆盖高优先级。"""
+    from .pipeline.similar import METHOD_PRIORITY
+
+    a, b = (a_entry_id, b_entry_id) if a_entry_id <= b_entry_id else (b_entry_id, a_entry_id)
+    current = get_similar_pair(a, b)
+    if current:
+        cur_rank = METHOD_PRIORITY.get(current["method"], 0)
+        new_rank = METHOD_PRIORITY.get(method, 0)
+        if new_rank < cur_rank or (new_rank == cur_rank and float(current["score"]) >= float(score)):
+            return
+        with conn_ctx() as conn:
+            conn.execute(
+                "UPDATE similar_pairs SET score=?, method=?, reason=?, created_at=? WHERE id=?",
+                (float(score), method, reason, now(), current["id"]))
+            conn.commit()
+        return
+    with conn_ctx() as conn:
+        conn.execute(
+            """INSERT INTO similar_pairs (id,a_entry_id,b_entry_id,score,method,reason,created_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (uid(), a, b, float(score), method, reason, now()))
+        conn.commit()
+
+
+def list_similar_pairs(entry_id: str) -> list[dict]:
+    with conn_ctx() as conn:
+        rows = conn.execute(
+            """SELECT * FROM similar_pairs WHERE a_entry_id=? OR b_entry_id=?
+               ORDER BY score DESC""", (entry_id, entry_id)).fetchall()
+    return _rows_to_dicts(rows)
+
+
+def delete_similar_pair(a_entry_id: str, b_entry_id: str) -> None:
+    a, b = (a_entry_id, b_entry_id) if a_entry_id <= b_entry_id else (b_entry_id, a_entry_id)
+    with conn_ctx() as conn:
+        conn.execute("DELETE FROM similar_pairs WHERE a_entry_id=? AND b_entry_id=?", (a, b))
+        conn.commit()
+
+
+def similar_pair_count() -> int:
+    with conn_ctx() as conn:
+        row = conn.execute("SELECT COUNT(*) AS n FROM similar_pairs").fetchone()
+    return int(row["n"]) if row else 0
+
+
+def list_all_similar_pairs() -> list[dict]:
+    with conn_ctx() as conn:
+        rows = conn.execute("SELECT * FROM similar_pairs ORDER BY score DESC").fetchall()
+    return _rows_to_dicts(rows)
+
+
+# ---------- 对比页所需的问答明细（Phase 6） ----------
+
+def list_qa_detail(ids: Iterable[str]) -> list[dict]:
+    """按 id 取问答明细，并带上面试标题/公司/时间（用于多版本作答对比）。"""
+    id_list = list(dict.fromkeys(ids))
+    if not id_list:
+        return []
+    out: list[dict] = []
+    chunk = 200
+    with conn_ctx() as conn:
+        for i in range(0, len(id_list), chunk):
+            part = id_list[i:i + chunk]
+            marks = ",".join("?" for _ in part)
+            rows = conn.execute(
+                f"""SELECT q.*, i.title AS interview_title, i.company AS interview_company,
+                           i.position AS interview_position, i.interview_at AS interview_at,
+                           i.date AS interview_date
+                    FROM qa_items q LEFT JOIN interviews i ON i.id = q.interview_id
+                    WHERE q.id IN ({marks})""", part).fetchall()
+            for r in rows:
+                d = dict(r)
+                d["answers"] = loads(d["answers"], [])
+                d["q_source_ref"] = loads(d["q_source_ref"])
+                out.append(d)
+    order = {qid: idx for idx, qid in enumerate(id_list)}
+    out.sort(key=lambda d: order.get(d["id"], 999))
+    return out
+
+
+# ---------- 简历（Phase 7） ----------
+
+def create_resume(name: str, content_text: str, skills: list, projects: list) -> str:
+    rid = uid()
+    ts = now()
+    with conn_ctx() as conn:
+        conn.execute(
+            """INSERT INTO resumes (id,name,content_text,skills_json,projects_json,created_at,updated_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (rid, name, content_text, dumps(skills), dumps(projects), ts, ts))
+        conn.commit()
+    return rid
+
+
+def get_resume(rid: str) -> dict | None:
+    with conn_ctx() as conn:
+        row = conn.execute("SELECT * FROM resumes WHERE id=?", (rid,)).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["skills"] = loads(d["skills_json"], [])
+    d["projects"] = loads(d["projects_json"], [])
+    return d
+
+
+def list_resumes() -> list[dict]:
+    with conn_ctx() as conn:
+        rows = conn.execute("SELECT * FROM resumes ORDER BY updated_at DESC").fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["skills"] = loads(d["skills_json"], [])
+        d["projects"] = loads(d["projects_json"], [])
+        out.append(d)
+    return out
+
+
+def update_resume(rid: str, name: str | None = None, skills: list | None = None,
+                  projects: list | None = None) -> None:
+    sets: dict = {"updated_at": now()}
+    if name is not None:
+        sets["name"] = name
+    if skills is not None:
+        sets["skills_json"] = dumps(skills)
+    if projects is not None:
+        sets["projects_json"] = dumps(projects)
+    cols = ", ".join(f"{k}=?" for k in sets)
+    with conn_ctx() as conn:
+        conn.execute(f"UPDATE resumes SET {cols} WHERE id=?", (*sets.values(), rid))
+        conn.commit()
+
+
+def delete_resume(rid: str) -> None:
+    with conn_ctx() as conn:
+        conn.execute("DELETE FROM resumes WHERE id=?", (rid,))
+        conn.commit()
+
+
+# ---------- 模拟面试（Phase 7） ----------
+
+def create_mock_session(title: str, mode: str, config_json: dict,
+                        interview_id: str | None = None,
+                        resume_id: str | None = None) -> str:
+    sid = uid()
+    ts = now()
+    with conn_ctx() as conn:
+        conn.execute(
+            """INSERT INTO mock_sessions (id,mode,interview_id,resume_id,title,config_json,
+               status,question_count,answered_count,started_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (sid, mode, interview_id, resume_id, title, dumps(config_json),
+             "running", 0, 0, ts))
+        conn.commit()
+    return sid
+
+
+def get_mock_session(sid: str) -> dict | None:
+    with conn_ctx() as conn:
+        row = conn.execute("SELECT * FROM mock_sessions WHERE id=?", (sid,)).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["config"] = loads(d["config_json"], {})
+    return d
+
+
+def list_mock_sessions() -> list[dict]:
+    with conn_ctx() as conn:
+        rows = conn.execute("SELECT * FROM mock_sessions ORDER BY started_at DESC").fetchall()
+    return _rows_to_dicts(rows)
+
+
+def update_mock_session(sid: str, **fields: Any) -> None:
+    allowed = {"status", "question_count", "answered_count", "finished_at", "title"}
+    sets = {k: v for k, v in fields.items() if k in allowed}
+    if not sets:
+        return
+    cols = ", ".join(f"{k}=?" for k in sets)
+    with conn_ctx() as conn:
+        conn.execute(f"UPDATE mock_sessions SET {cols} WHERE id=?", (*sets.values(), sid))
+        conn.commit()
+
+
+def delete_mock_session(sid: str) -> None:
+    with conn_ctx() as conn:
+        conn.execute("DELETE FROM mock_turns WHERE session_id=?", (sid,))
+        conn.execute("DELETE FROM mock_sessions WHERE id=?", (sid,))
+        conn.commit()
+
+
+def insert_mock_turn(turn: dict) -> str:
+    tid = turn.get("id") or uid()
+    ts = now()
+    with conn_ctx() as conn:
+        conn.execute(
+            """INSERT INTO mock_turns (id,session_id,seq,question_text,source,reference_entry_id,
+               reference_answer,reference_tips,my_answer,elapsed_sec,mark,is_follow_up,
+               created_at,updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (tid, turn["session_id"], turn.get("seq", 0), turn.get("question_text", ""),
+             turn.get("source", "bank"), turn.get("reference_entry_id"),
+             turn.get("reference_answer"), turn.get("reference_tips"),
+             turn.get("my_answer"), turn.get("elapsed_sec"), turn.get("mark"),
+             1 if turn.get("is_follow_up") else 0, ts, ts))
+        conn.commit()
+    return tid
+
+
+def list_mock_turns(session_id: str) -> list[dict]:
+    with conn_ctx() as conn:
+        rows = conn.execute(
+            "SELECT * FROM mock_turns WHERE session_id=? ORDER BY seq ASC", (session_id,)).fetchall()
+    return _rows_to_dicts(rows)
+
+
+def get_mock_turn(tid: str) -> dict | None:
+    with conn_ctx() as conn:
+        row = conn.execute("SELECT * FROM mock_turns WHERE id=?", (tid,)).fetchone()
+    return dict(row) if row else None
+
+
+def update_mock_turn(tid: str, fields: dict) -> None:
+    allowed = {"my_answer", "elapsed_sec", "mark", "question_text", "reference_answer", "reference_tips"}
+    sets = {k: v for k, v in fields.items() if k in allowed}
+    if not sets:
+        return
+    sets["updated_at"] = now()
+    cols = ", ".join(f"{k}=?" for k in sets)
+    with conn_ctx() as conn:
+        conn.execute(f"UPDATE mock_turns SET {cols} WHERE id=?", (*sets.values(), tid))
+        conn.commit()

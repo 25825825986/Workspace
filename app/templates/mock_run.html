@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+{% block title %}模拟中 · {{ session.title }}{% endblock %}
+
+{% block head_extra %}
+<style>
+.run-head{display:flex;justify-content:space-between;gap:var(--sp-4);align-items:center;flex-wrap:wrap}
+.progress{height:6px;background:var(--chip-bg);border-radius:var(--r-pill);overflow:hidden;margin-top:8px}
+.progress > i{display:block;height:100%;background:var(--brand);width:0}
+.q-card{position:relative}
+.q-text{font-size:20px;line-height:1.7;margin:6px 0 12px;font-weight:600}
+.q-tools{display:flex;gap:var(--sp-2);align-items:center;flex-wrap:wrap;margin-bottom:var(--sp-3)}
+.answer-box{width:100%;min-height:170px;font-family:var(--font);font-size:15px;line-height:1.7}
+.marks{display:flex;gap:var(--sp-2);flex-wrap:wrap;margin-top:var(--sp-2)}
+.mark-btn.active{border-color:var(--brand);background:var(--brand-soft);color:var(--brand)}
+.nav-strip{display:flex;gap:6px;flex-wrap:wrap;margin-top:var(--sp-3)}
+.nav-strip a{width:30px;height:30px;display:flex;align-items:center;justify-content:center;
+  border:1px solid var(--line);border-radius:var(--r-sm);font-size:12px;color:var(--ink-2);background:var(--surface)}
+.nav-strip a.cur{border-color:var(--brand);color:var(--brand);font-weight:600}
+.nav-strip a.done{background:var(--ok-soft);border-color:var(--ok-line);color:var(--ok)}
+.timer{font-family:var(--mono);font-size:13px;color:var(--muted)}
+</style>
+{% endblock %}
+
+{% block content %}
+<nav class="crumbs"><a href="/mock">模拟面试</a> / {{ session.title }}</nav>
+
+<section class="card">
+  <div class="run-head">
+    <div>
+      <h2>{{ session.title }}</h2>
+      <p class="muted small">
+        模式：{{ {'whole': '整场复盘', 'bank': '题库随机', 'resume': '简历+AI'}.get(session.mode, session.mode) }}
+        ｜ 进度 {{ answered }} / {{ turns|length }} 题
+        {% if session.config.get('tts') %}｜ 语音：{{ {'web': '浏览器语音', 'none': '静音', 'edge': '服务端 edge-tts'}.get(session.config.tts, session.config.tts) }}{% endif %}
+        {% if session.config.get('note') %}｜ <span class="warn-text">{{ session.config.note }}</span>{% endif %}
+      </p>
+      <div class="progress"><i id="prog" style="width: {{ (answered / (turns|length or 1) * 100) | round }}%"></i></div>
+    </div>
+    <div class="ops">
+      <span class="timer" id="timer">00:00</span>
+      <button class="btn" id="btn-finish" data-confirm="结束本轮模拟并生成报告？">结束并生成报告</button>
+    </div>
+  </div>
+</section>
+
+{% if current %}
+<section class="card q-card">
+  <div class="between">
+    <div>
+      <span class="qa-seq">#{{ current.seq }}</span>
+      <span class="chip">{{ {'whole': '原场题目', 'bank': '题库抽题', 'ai': 'AI 生成'}.get(current.source, current.source) }}</span>
+      {% if current.is_follow_up %}<span class="chip s-pending">追问</span>{% endif %}
+      {% if current.mark %}<span class="chip">{{ {'good': '掌握', 'unsure': '不确定', 'blank': '不会'}.get(current.mark, current.mark) }}</span>{% endif %}
+    </div>
+    <div class="q-tools">
+      <button class="btn small" id="btn-speak">🔊 播报问题</button>
+      <button class="btn small" id="btn-stop">停止</button>
+    </div>
+  </div>
+
+  <p class="q-text">{{ current.question_text }}</p>
+
+  <details class="fixer">
+    <summary>参考要点（默认可不看；来自知识库沉淀）</summary>
+    {% if current.reference_answer %}
+    <p class="tagline">忠实原文参考（历史作答）</p>
+    <p class="verbatim">{{ current.reference_answer }}</p>
+    {% endif %}
+    {% if current.reference_tips %}
+    <p class="tagline">优化建议 / 考察点</p>
+    <p class="small">{{ current.reference_tips }}</p>
+    {% endif %}
+    {% if not current.reference_answer and not current.reference_tips %}
+    <p class="muted small">该题暂无参考要点（AI 生成题或未沉淀的题库题）。</p>
+    {% endif %}
+    {% if current.reference_entry_id %}
+    <p class="small"><a href="/knowledge/compare/{{ current.reference_entry_id }}">查看知识库该考点的全部作答对比 →</a></p>
+    {% endif %}
+  </details>
+
+  <label>我的回答（口头作答的要点记录）
+    <textarea class="answer-box" id="answer" placeholder="口述后把要点记下来，方便复盘时对照参考要点……">{{ current.my_answer or '' }}</textarea>
+  </label>
+  <div class="marks">
+    <button class="btn small mark-btn {{ 'active' if current.mark == 'good' else '' }}" data-mark="good">掌握</button>
+    <button class="btn small mark-btn {{ 'active' if current.mark == 'unsure' else '' }}" data-mark="unsure">不确定</button>
+    <button class="btn small mark-btn {{ 'active' if current.mark == 'blank' else '' }}" data-mark="blank">不会</button>
+    <span class="muted small" id="save-info">Ctrl/⌘ + Enter 保存并进入下一题</span>
+  </div>
+  <div class="row">
+    {% if idx > 0 %}<a class="btn" href="/mock/{{ session.id }}?i={{ idx }}">← 上一题</a>{% endif %}
+    <button class="btn primary" id="btn-save-next">保存并下一题 →</button>
+    {% if idx + 1 < turns|length %}<a class="btn" href="/mock/{{ session.id }}?i={{ idx + 2 }}">跳过</a>{% endif %}
+  </div>
+
+  <div class="nav-strip">
+    {% for t in turns %}
+    <a href="/mock/{{ session.id }}?i={{ loop.index }}"
+       class="{{ 'cur' if loop.index0 == idx else '' }} {{ 'done' if (t.my_answer or t.mark) and loop.index0 != idx else '' }}">{{ loop.index }}</a>
+    {% endfor %}
+  </div>
+</section>
+{% else %}
+<section class="card empty-state"><p>本轮还没有题目。返回 <a href="/mock">模拟面试</a> 重新创建。</p></section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+const TURN_ID = '{{ current.id if current else "" }}';
+const SESSION_ID = '{{ session.id }}';
+const TTS = '{{ session.config.get("tts") or "web" }}';
+const QUESTION = {{ (current.question_text if current else "") | tojson }};
+const $ = (id) => document.getElementById(id);
+let mark = '{{ current.mark or "" }}';
+let seconds = {{ current.elapsed_sec or 0 }};
+
+/* 计时（每题的作答时长） */
+setInterval(() => {
+  seconds += 1;
+  const m = String(Math.floor(seconds / 60)).padStart(2, '0');
+  const s = String(seconds % 60).padStart(2, '0');
+  $('timer').textContent = `${m}:${s}`;
+}, 1000);
+
+/* 语音播报：浏览器内置（零依赖）。服务端 edge-tts 未安装时自动降级提示。 */
+function speak(text) {
+  if (TTS === 'none') { alert('当前已选择「静音」模式，可在模拟设置里改为浏览器语音。'); return; }
+  if (TTS === 'edge' || TTS === 'piper') {
+    alert((TTS === 'edge' ? '服务端 edge-tts' : '开源本地 Piper') + ' 未安装，本次使用浏览器语音播报。');
+  }
+  if (!('speechSynthesis' in window)) { alert('当前浏览器不支持语音合成，请使用 Chrome/Edge。'); return; }
+  window.speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = 'zh-CN';
+  u.rate = 1.0;
+  window.speechSynthesis.speak(u);
+}
+$('btn-speak').addEventListener('click', () => speak(QUESTION));
+$('btn-stop').addEventListener('click', () => window.speechSynthesis && window.speechSynthesis.cancel());
+
+document.querySelectorAll('.mark-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    mark = (mark === btn.dataset.mark) ? '' : btn.dataset.mark;
+    document.querySelectorAll('.mark-btn').forEach(b => b.classList.toggle('active', b.dataset.mark === mark));
+  });
+});
+
+async function save(goNext) {
+  const info = $('save-info');
+  info.textContent = '保存中…';
+  try {
+    await postJSON('/api/mock/turns/' + TURN_ID, {
+      my_answer: $('answer').value, elapsed_sec: seconds, mark: mark || null,
+    });
+    const next = {{ (idx + 2) }};
+    location.href = goNext ? ('/mock/' + SESSION_ID + '?i=' + next) : ('/mock/' + SESSION_ID);
+  } catch (e) { info.textContent = ''; alert(e.message); }
+}
+$('btn-save-next').addEventListener('click', () => save(true));
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); save(true); }
+});
+document.querySelectorAll('[data-confirm]').forEach(async (btn) => {
+  btn.addEventListener('click', async () => {
+    if (!confirm(btn.dataset.confirm)) return;
+    try {
+      await postJSON('/api/mock/sessions/' + SESSION_ID + '/finish', {});
+      location.href = '/mock/' + SESSION_ID + '/report';
+    } catch (e) { alert(e.message); }
+  });
+});
+</script>
+{% endblock %}

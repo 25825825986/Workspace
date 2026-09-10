@@ -1,17 +1,32 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN"{% if theme in ('light', 'dark') %} data-theme="{{ theme }}"{% endif %}>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}AI_Review · AI 面试复盘{% endblock %}</title>
 <link rel="stylesheet" href="/static/style.css">
 <script>
-/* 首屏状态注入：在 body 渲染前执行，避免"答案闪现"与主题闪烁（Phase 4 / Q9 优化） */
+/* 首屏主题解析（在 body 渲染前执行，避免主题闪烁）：
+   - 设置为 light/dark 时由服务端直接写入 data-theme；
+   - 设置为 system（未写入）时在这里按系统偏好决定，并跟随系统变化。 */
 (function () {
+  function resolve() {
+    var el = document.documentElement;
+    if (el.hasAttribute('data-theme')) return;
+    var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    el.setAttribute('data-theme', dark ? 'dark' : 'light');
+  }
+  resolve();
   try {
-    var t = localStorage.getItem('ai_review_theme');
-    if (t === 'dark' || t === 'light') document.documentElement.setAttribute('data-theme', t);
-  } catch (e) { /* 隐私模式下忽略 */ }
+    if (window.matchMedia) {
+      window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () {
+        if ('{{ theme }}' === 'system') {
+          document.documentElement.removeAttribute('data-theme');
+          resolve();
+        }
+      });
+    }
+  } catch (e) { /* 老浏览器忽略 */ }
 })();
 </script>
 {% block head_extra %}{% endblock %}
@@ -23,9 +38,15 @@
     <nav>
       <a href="/" class="{{ 'active' if request.endpoint == 'page_index' else '' }}">面试记录</a>
       <a href="/import" class="{{ 'active' if request.endpoint == 'page_import' else '' }}">导入面试</a>
-      <a href="/bank" class="{{ 'active' if request.endpoint in ('page_bank', 'page_export_bank') else '' }}">知识库</a>
+      <a href="/knowledge" class="{{ 'active' if request.endpoint in ('page_knowledge', 'page_knowledge_compare', 'page_export_bank') else '' }}">知识库</a>
+      <a href="/mock" class="{{ 'active' if request.endpoint in ('page_mock_setup', 'page_mock_run', 'page_mock_report') else '' }}">模拟面试</a>
+      <a href="/settings" class="{{ 'active' if request.endpoint == 'page_settings' else '' }}">设置</a>
     </nav>
-    <span class="extractor-badge" title="当前解析方式">解析：{{ extractor_label }}</span>
+    <div class="topbar-right">
+      <button class="btn small" id="theme-toggle" type="button"
+              title="在浅色 / 深色之间快速切换（也可在设置页选择跟随系统）">切换主题</button>
+      <span class="mode-badge {{ mode_badge.kind }}" title="当前解析模式（可在设置页切换）">{{ mode_badge.text }}</span>
+    </div>
   </div>
 </header>
 
@@ -37,7 +58,7 @@
 <main class="wrap">
 {% block content %}{% endblock %}
 </main>
-<footer class="wrap foot">AI_Review · 本地运行 · 数据保存在项目 data/ 目录</footer>
+<footer class="wrap foot">AI_Review · v{{ app_version }} · 本地运行 · 数据保存在项目 data/ 目录</footer>
 <script src="/static/app.js"></script>
 {% block scripts %}{% endblock %}
 </body>

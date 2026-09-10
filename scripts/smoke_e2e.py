@@ -8,8 +8,12 @@
 """
 from __future__ import annotations
 
+import base64
+import io
+import json
 import shutil
 import sys
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -43,7 +47,11 @@ def json_of(resp, name: str) -> dict:
 # 1) 页面渲染
 check("GET / 渲染", client.get("/").status_code == 200)
 check("GET /import 渲染", client.get("/import").status_code == 200)
-check("GET /bank 渲染(空库)", "面经库为空" in client.get("/bank").get_data(as_text=True))
+kb0 = client.get("/knowledge")
+check("GET /knowledge 渲染(空库)", kb0.status_code == 200
+      and "知识库还是空的" in kb0.get_data(as_text=True))
+check("旧链接 /bank 重定向到知识库", client.get("/bank").status_code in (301, 302, 308))
+check("GET /mock 渲染", client.get("/mock").status_code == 200)
 
 # 2) analyze：有标签 → 标签直读
 r = client.post("/api/analyze", json={"text": SAMPLE})
@@ -77,8 +85,16 @@ check("问答列表页含 5 题与知识点", "共 5 题" in list_html and "缓�
 
 d = client.get(f"/api/interviews/{iid}/data").get_json()
 qas = d["qas"]
-check("QA 均 confirmed 且带原文引用", all(q["status"] == "confirmed" and q["q_source_ref"]
-      and q["answers"] and q["answers"][0]["source_ref"] for q in qas))
+normal_qas = [q for q in qas if q["direction"] != "reverse"]
+reverse_qas = [q for q in qas if q["direction"] == "reverse"]
+check("正常问答均 confirmed 且带原文引用",
+      len(normal_qas) == 4 and all(q["status"] == "confirmed" and q["q_source_ref"]
+                                   and q["answers"] and q["answers"][0]["source_ref"]
+                                   for q in normal_qas),
+      str([(q["seq"], q["status"]) for q in qas]))
+check("反问环节识别为 direction=reverse（邀请话术不单独成题）",
+      len(reverse_qas) == 1 and reverse_qas[0]["status"] == "pending"
+      and "想问" in reverse_qas[0]["q_text"], str([(q["seq"], q["direction"]) for q in qas]))
 
 # 4) 单题复盘 + R2 修正：extract_text 保持原样，只产生 corrected 副本
 qid = qas[2]["id"]  # 第 3 题：缓存失效/穿透
@@ -99,13 +115,13 @@ check("corrected 副本与批注落库", qa_after["answers"][0]["is_corrected"] 
 detail_html = client.get(f"/interviews/{iid}/qa/{qid}").get_data(as_text=True)
 check("单题复盘页渲染", "忠实原文" in detail_html and "优化建议" in detail_html)
 
-# 5) 整场入库（R3 合并：知识点类别聚合 + 同问法去重）
+# 5) 整场入库（R3 合并：知识点类别聚合 + 同问法去重；反问待确认不合并）
 r = client.post(f"/api/interviews/{iid}/merge-all", json={})
 m = json_of(r, "POST merge-all")
-check("整场入库 5 条", m.get("merged") == 5, str(m))
+check("整场入库 4 条（反问待确认被跳过）", m.get("merged") == 4 and m.get("skipped") == 1, str(m))
 entries = repository.list_entries()
 cats = {e["category_name"] for e in entries}
-check("入库后 5 条问法条目、4 个知识点类别", len(entries) == 5 and len(cats) == 4,
+check("入库后 4 条问法条目、3 个二级知识点", len(entries) == 4 and len(cats) == 3,
       str([(e["category_name"], e["head_question"]) for e in entries]))
 cache_qas = [e for e in entries if e["category_name"] == "缓存"]
 cache_total = sum(e["ask_times"] for e in cache_qas)
@@ -114,11 +130,12 @@ check("同类不同问法各成条目且出处各 1 场", len(cache_qas) == 2
       and all(e["ask_times"] == 1 and e["source_interview_count"] == 1 for e in cache_qas))
 check("条目聚合出 optimization(R2 独立栏)", any(e.get("optimization") for e in cache_qas),
       str([e.get("optimization") for e in cache_qas]))
-check("单题已回写 entry_id", all(q["entry_id"] for q in repository.list_qa(iid)))
+check("正常问答已回写 entry_id（反问待确认暂不入库）",
+      all(q["entry_id"] for q in repository.list_qa(iid) if q["direction"] != "reverse"))
 
-# 6) 面经库与导出
-bank_html = client.get("/bank").get_data(as_text=True)
-check("面经库页类别聚合显示", "面经库" in bank_html and "累计被问 2 次" in bank_html)
+# 6) 知识库与导出
+kb_html = client.get("/knowledge").get_data(as_text=True)
+check("知识库页分组聚合显示", "知识库" in kb_html and "累计被问 2 次" in kb_html)
 exp_html = client.get(f"/interviews/{iid}/export").get_data(as_text=True)
 check("导出预览(本场) 分节", "忠实问题" in exp_html and "优化建议" in exp_html and "批注" in exp_html)
 dl = client.get(f"/download/interviews/{iid}.md")
@@ -205,7 +222,7 @@ if len(second["answers"]) >= 2:
 else:
     check("拆分：样本不足跳过", True)
 
-victim = repository.list_qa(iid)[-1]
+victim = [q for q in repository.list_qa(iid) if q["direction"] != "reverse"][-1]
 client.post(f"/api/qa/{victim['id']}/delete", json={})
 alive = repository.list_qa(iid)
 check("删除为软删除（列表不再出现）",
@@ -222,6 +239,187 @@ check("记录页搜索无结果时给出空状态", "没有匹配的面试记录
 export_dir = ROOT / "data" / "export"
 check("导出文件已落盘 data/export/", export_dir.exists() and any(export_dir.glob("*.md")),
       str(list(export_dir.glob('*'))[:3] if export_dir.exists() else "missing"))
+
+# 10) Phase 5：设置页 / AI 模式热生效 / 主题 / API Key / 连通性
+sp = client.get("/settings")
+sp_html = sp.get_data(as_text=True)
+check("GET /settings 渲染", sp.status_code == 200 and "主题外观" in sp_html
+      and "AI 模式" in sp_html and "模型 API" in sp_html and "数据信息" in sp_html)
+
+s0 = client.get("/api/settings").get_json()
+check("默认设置：主题=system / AI=auto / 未配置 Key",
+      s0["settings"]["theme"] == "system" and s0["settings"]["ai_mode"] == "auto"
+      and s0["has_api_key"] is False and s0["extractor_mode"] == "rule", str(s0)[:200])
+
+r = client.post("/api/settings", json={"ai_mode": "on"})
+s1 = r.get_json()
+check("切换强制 AI：无需重启即生效（extractor→deepseek）",
+      r.status_code == 200 and s1["extractor_mode"] == "deepseek"
+      and "AI 模式" in s1["mode_badge"]["text"], str(s1)[:200])
+a1 = client.post("/api/analyze", json={"text": SAMPLE}).get_json()
+check("/api/analyze 反映新模式", a1.get("extractor") == "deepseek", str(a1.get("extractor")))
+
+r = client.post("/api/settings", json={"ai_mode": "off"})
+a2 = client.post("/api/analyze", json={"text": SAMPLE}).get_json()
+check("切回非 AI 模式：extractor→rule", r.get_json()["extractor_mode"] == "rule"
+      and a2.get("extractor") == "rule", f"{r.get_json()['extractor_mode']} / {a2.get('extractor')}")
+
+r = client.post("/api/settings", json={"theme": "dark"})
+root_html = client.get("/").get_data(as_text=True)
+check("深色主题服务端直出（无闪烁）",
+      r.status_code == 200 and 'data-theme="dark"' in root_html
+      and 'data-theme="dark"' in client.get("/settings").get_data(as_text=True))
+css = client.get("/static/style.css").get_data(as_text=True)
+check("样式表含深色变量块", ':root[data-theme="dark"]' in css)
+
+bad = client.post("/api/settings", json={"theme": "blue"})
+check("非法主题被拒（400）", bad.status_code == 400, str(bad.get_json())[:120])
+
+r = client.post("/api/settings/api-key", json={"api_key": "sk-test1234567890abcd"})
+k1 = r.get_json()
+check("API Key 保存后掩码显示、不返明文",
+      r.status_code == 200 and k1["masked_key"] == "sk-t****abcd"
+      and "sk-test1234567890abcd" not in json.dumps(k1, ensure_ascii=False)
+      and k1["has_api_key"] is True, str(k1)[:200])
+
+t = client.post("/api/settings/test", json={})
+check("连通性测试：失败时返回 400 + 可读信息（不 500）",
+      t.status_code == 400 and bool((t.get_json() or {}).get("message")),
+      f"http={t.status_code} body={str(t.get_json())[:160]}")
+
+r = client.post("/api/settings/api-key", json={"api_key": ""})
+check("清除 Key 后回退", r.get_json()["has_api_key"] is False
+      and r.get_json()["masked_key"] == "", str(r.get_json())[:160])
+
+settings_file = ROOT / "data" / "settings.json"
+secrets_file = ROOT / "data" / "secrets.json"
+conf = json.loads(settings_file.read_text(encoding="utf-8"))
+check("设置原子落盘 data/settings.json（结构完整）",
+      settings_file.exists() and set(conf) >= {"theme", "ai_mode", "llm"} and secrets_file.exists(),
+      str(conf))
+check("密钥文件不经 HTTP 暴露", client.get("/data/secrets.json").status_code == 404)
+
+r = client.post("/api/settings/reset", json={})
+check("恢复默认设置", r.status_code == 200 and r.get_json()["settings"]["ai_mode"] == "auto"
+      and r.get_json()["settings"]["theme"] == "system", str(r.get_json())[:160])
+
+# 11) Phase 6：专题归类 / 反问专题 / 相似识别 / 对比页
+rev_id = reverse_qas[0]["id"]
+client.post(f"/api/qa/{rev_id}/confirm", json={})
+client.post(f"/api/qa/{rev_id}/merge", json={})
+entries_all = repository.list_entries()
+check("反问环节独立成专题条目（direction=reverse → topic=reverse）",
+      len(entries_all) == 5 and any(e.get("topic") == "reverse" for e in entries_all),
+      str([(e.get("topic"), e.get("group_name"), e["head_question"][:14]) for e in entries_all]))
+check("每个条目都有一级分类", all(e.get("group_name") for e in entries_all),
+      str([e.get("group_name") for e in entries_all]))
+check("自我介绍归入 self_intro 专题",
+      any(e.get("topic") == "self_intro" for e in entries_all))
+
+t1 = "[面试官] 讲讲你们项目里本地缓存是怎么实现的？\n[我] 用 Redis 做本地缓存，key 带版本号。\n"
+t2 = "[面试官] 讲讲你们项目里本地缓存是怎么实现的呢？\n[我] Redis，key 带版本号，发版时清理。\n"
+i1 = json_of(client.post("/api/interviews", json={"text": t1, "force": True,
+      "role_map": {"面试官": "interviewer", "我": "self"}}), "相似样本1")
+i2 = json_of(client.post("/api/interviews", json={"text": t2, "force": True,
+      "role_map": {"面试官": "interviewer", "我": "self"}}), "相似样本2")
+client.post(f"/api/interviews/{i1['interview_id']}/merge-all", json={})
+client.post(f"/api/interviews/{i2['interview_id']}/merge-all", json={})
+rc = json_of(client.post("/api/knowledge/recompute", json={"use_ai": False}), "重算相似关联")
+check("规则层识别相似问题并落库", rc.get("similar_pairs", 0) >= 1 and rc.get("rule_matched", 0) >= 1,
+      str(rc))
+sim_entry = next(e for e in repository.list_entries() if "本地缓存是怎么实现" in e["head_question"])
+pairs = repository.list_similar_pairs(sim_entry["id"])
+check("相似对可查询（含分数与方法）", len(pairs) >= 1 and pairs[0]["method"] in ("rule", "ai", "manual"),
+      str(pairs)[:160])
+cmp_html = client.get(f"/knowledge/compare/{sim_entry['id']}").get_data(as_text=True)
+check("对比页渲染（来源 / 忠实原文 / 优化建议 / 批注）",
+      "历史作答对比" in cmp_html and "忠实原文回答" in cmp_html and "优化建议" in cmp_html
+      and "相似问题关联" in cmp_html)
+detail_rows = repository.list_qa_detail(sim_entry["source_qa_ids"])
+check("对比页数据可回溯到具体作答", len(detail_rows) >= 1 and bool(detail_rows[0]["interview_title"]),
+      str(len(detail_rows)))
+multi_src = [e for e in repository.list_entries() if len(e.get("source_qa_ids") or []) >= 2]
+if multi_src:
+    rows_multi = repository.list_qa_detail(multi_src[0]["source_qa_ids"])
+    cmp_multi = client.get(f"/knowledge/compare/{multi_src[0]['id']}").get_data(as_text=True)
+    check("多次作答可在对比页并列展示", len(rows_multi) >= 2 and "来源面试" in cmp_multi,
+          str(len(rows_multi)))
+else:
+    check("多次作答可在对比页并列展示（样本不足跳过）", True)
+qa_pick = detail_rows[0]["id"]
+client.post(f"/api/entries/{sim_entry['id']}/best", json={"qa_id": qa_pick})
+check("标为最佳作答", repository.get_entry(sim_entry["id"])["best_qa_id"] == qa_pick)
+before_pairs = repository.similar_pair_count()
+client.post("/api/similar/unlink", json={"a_entry_id": pairs[0]["a_entry_id"],
+                                         "b_entry_id": pairs[0]["b_entry_id"]})
+check("取消关联生效", repository.similar_pair_count() == before_pairs - 1,
+      f"{before_pairs} → {repository.similar_pair_count()}")
+kb_html2 = client.get("/knowledge").get_data(as_text=True)
+check("知识库页展示专题区与分组", "反问环节" in kb_html2 and "自我介绍" in kb_html2
+      and "重算相似关联" in kb_html2)
+
+# 12) Phase 7：简历导入（含零依赖 docx）/ 模拟面试全流程
+r = client.post("/api/resumes", json={
+    "name": "测试简历",
+    "content": "5 年 Java 后端经验，熟悉 Redis、Kafka、微服务，负责订单系统与支付平台。\n"})
+rv = json_of(r, "简历导入(txt)")
+check("简历解析出技能与项目", "java" in [s.lower() for s in rv.get("skills", [])]
+      and bool(rv.get("projects")), str(rv)[:200])
+
+buf = io.BytesIO()
+with zipfile.ZipFile(buf, "w") as zf:
+    zf.writestr("word/document.xml",
+                "<w:document><w:body>"
+                "<w:p><w:r><w:t>3 年 Python 经验</w:t></w:r></w:p>"
+                "<w:p><w:r><w:t>熟悉 Docker 与 Kubernetes</w:t></w:r></w:p>"
+                "</w:body></w:document>")
+data_url = ("data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,"
+            + base64.b64encode(buf.getvalue()).decode())
+dv = json_of(client.post("/api/resumes", json={"name": "resume.docx", "data_url": data_url}),
+             "简历导入(docx 零依赖)")
+skills_low = [s.lower() for s in dv.get("skills", [])]
+check("docx 零依赖解析成功", "python" in skills_low and "docker" in skills_low, str(dv)[:200])
+
+bad = client.post("/api/resumes", json={"name": "a.pdf", "data_url": "data:application/pdf;base64,AAAA"})
+check("PDF 给出明确不支持提示", bad.status_code == 400 and "PDF" in (bad.get_json() or {}).get("error", ""),
+      str(bad.get_json())[:120])
+check("简历列表接口", any(i["name"] == "测试简历"
+      for i in client.get("/api/resumes").get_json()["items"]))
+
+ms = json_of(client.post("/api/mock/sessions", json={"mode": "bank", "count": 3, "tts": "web"}),
+             "创建模拟(题库)")
+sid = ms.get("session_id")
+run_html = client.get(f"/mock/{sid}").get_data(as_text=True)
+check("模拟作答页渲染（进度/语音/作答框）",
+      "播报问题" in run_html and "我的回答" in run_html and "结束并生成报告" in run_html)
+mock_turns = repository.list_mock_turns(sid)
+check("题目已落库且数量一致",
+      len(mock_turns) == ms.get("question_count") and len(mock_turns) >= 1, str(len(mock_turns)))
+r = client.post(f"/api/mock/turns/{mock_turns[0]['id']}",
+                json={"my_answer": "我的回答要点", "elapsed_sec": 42, "mark": "good"})
+check("作答保存并更新进度", r.status_code == 200 and r.get_json().get("answered") == 1,
+      str(r.get_json()))
+client.post(f"/api/mock/sessions/{sid}/finish", json={})
+rep = client.get(f"/mock/{sid}/report").get_data(as_text=True)
+check("报告页渲染（统计/逐题对照/建议）",
+      "逐题对照" in rep and "需要加强" in rep and "下一步建议" in rep)
+
+w = json_of(client.post("/api/mock/sessions",
+                        json={"mode": "whole", "interview_id": iid, "count": 5}),
+            "创建模拟(整场)")
+check("整场模式题量与原场当前题目一致",
+      w.get("question_count") == len(repository.list_qa(iid)) and w.get("question_count") >= 1,
+      f"{w.get('question_count')} vs {len(repository.list_qa(iid))}")
+rm = json_of(client.post("/api/mock/sessions",
+                         json={"mode": "resume", "resume_id": rv["resume_id"], "count": 4,
+                               "ai_ratio": 0.5}), "创建模拟(简历)")
+check("简历模式可用（无 Key 时回退题库并给出说明）",
+      rm.get("question_count") == 4 and rm.get("ai_used") == 0 and bool(rm.get("note")),
+      str(rm)[:200])
+tts = client.get("/api/tts/status").get_json()
+check("语音能力探测（web 可用、edge 可探）", tts.get("web") is True and "edge" in tts, str(tts))
+client.post(f"/api/mock/sessions/{sid}/delete", json={})
+check("删除模拟会话", repository.get_mock_session(sid) is None)
 
 print()
 print(f"共 {len(passed) + len(failed)} 项断言：通过 {len(passed)} / 失败 {len(failed)}")

@@ -7,6 +7,11 @@
   </div>
 </section>
 
+{% if extractor_mode != 'deepseek' %}
+<p class="hint">当前为「{{ mode_badge.text }}」：使用本地规则切分。如需 AI 角色推断与问答抽取，请到
+  <a href="/settings">设置</a> 启用 AI 模式并配置 API Key。</p>
+{% endif %}
+
 <div id="errbox" class="flash err" style="display:none"></div>
 <div id="warnbox" class="flash warn" style="display:none"></div>
 

@@ -1,0 +1,231 @@
+{% extends "base.html" %}
+{% block title %}模拟面试 · AI_Review{% endblock %}
+
+{% block head_extra %}
+<style>
+.mode-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:var(--sp-3)}
+.mode-card{padding:14px;border:1px solid var(--line-strong);border-radius:var(--r-lg);cursor:pointer;
+  background:var(--surface);transition:border-color .15s,background .15s}
+.mode-card:hover{background:var(--hover-bg)}
+.mode-card.active{border-color:var(--brand);background:var(--brand-soft)}
+.mode-card b{display:block;margin-bottom:4px}
+.mode-card input{display:none}
+.kv{display:flex;gap:var(--sp-2);flex-wrap:wrap;align-items:center;margin-bottom:6px}
+.kv input[type=text]{flex:1 1 260px}
+</style>
+{% endblock %}
+
+{% block content %}
+<section class="page-head">
+  <div>
+    <h1>模拟面试</h1>
+    <p class="muted">用已有的面试记录或知识库题，配合简历与 AI 生成题，做一轮可复盘的口头演练。</p>
+  </div>
+  <span class="mode-badge {{ mode_badge.kind }}">{{ mode_badge.text }}</span>
+</section>
+
+<div id="msg" class="flash ok" style="display:none"></div>
+<div id="err" class="flash err" style="display:none"></div>
+
+<section class="card">
+  <h2>① 选择出题方式</h2>
+  <div class="mode-cards" id="mode-cards">
+    <label class="mode-card active" data-mode="bank">
+      <input type="radio" name="mode" value="bank" checked>
+      <b>题库随机</b>
+      <span class="muted small">从知识库按被问频次加权抽取，适合快速自查薄弱点（题库 {{ bank_stats.entries }} 条）</span>
+    </label>
+    <label class="mode-card" data-mode="whole">
+      <input type="radio" name="mode" value="whole">
+      <b>整场面试复盘</b>
+      <span class="muted small">选定某场面试记录，按原来的题目顺序重问一遍</span>
+    </label>
+    <label class="mode-card" data-mode="resume">
+      <input type="radio" name="mode" value="resume">
+      <b>简历 + 题库 + AI</b>
+      <span class="muted small">导入简历后按技能/项目生成针对性问题，AI 与题库按比例混合</span>
+    </label>
+  </div>
+
+  <div id="pane-whole" class="pane" style="display:none">
+    <label>选择面试记录
+      <select id="f-interview">
+        {% for iv in interviews %}
+        <option value="{{ iv.id }}">{{ iv.title }}（{{ iv.qa_count }} 题）</option>
+        {% endfor %}
+      </select>
+      {% if not interviews %}<span class="hint warn-text">还没有面试记录，请先导入一场面试。</span>{% endif %}
+    </label>
+  </div>
+
+  <div id="pane-resume" class="pane" style="display:none">
+    <label>选择已有简历
+      <select id="f-resume">
+        <option value="">（新导入）</option>
+        {% for r in resumes %}<option value="{{ r.id }}">{{ r.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <div class="grid2">
+      <label>上传简历文件（.txt / .md / .docx）
+        <input type="file" id="f-resume-file" accept=".txt,.md,.markdown,.docx">
+      </label>
+      <label>或粘贴简历文本
+        <textarea id="f-resume-text" rows="4" placeholder="粘贴简历内容……"></textarea>
+      </label>
+    </div>
+    <div class="row">
+      <button class="btn" id="btn-parse-resume" type="button">解析简历</button>
+      <span class="muted small" id="resume-info"></span>
+    </div>
+    <div id="resume-parsed" style="display:none">
+      <label>技能关键词（可修改，逗号分隔）
+        <input id="f-skills" placeholder="如：java, redis, 微服务, 高并发">
+      </label>
+      <label>项目关键词（可修改，逗号分隔）
+        <input id="f-projects" placeholder="如：订单系统, 支付平台">
+      </label>
+    </div>
+  </div>
+</section>
+
+<section class="card">
+  <h2>② 参数</h2>
+  <div class="grid3">
+    <label>题目数量 <input id="f-count" type="number" min="1" max="30" value="8"></label>
+    <label>AI 生成比例（仅简历模式）
+      <input id="f-ai-ratio" type="range" min="0" max="0.8" step="0.1" value="0.4">
+      <span class="hint" id="ai-ratio-hint">40% AI 生成 + 60% 题库随机</span>
+    </label>
+    <label>语音播报
+      <select id="f-tts">
+        <option value="web">浏览器语音（零依赖，默认）</option>
+        <option value="none">静音（纯文本）</option>
+        <option value="edge" {% if not tts_providers.edge %}disabled{% endif %}>
+          服务端 edge-tts（在线音色更自然）{% if not tts_providers.edge %} · 未安装{% endif %}</option>
+        <option value="piper" {% if not tts_providers.piper %}disabled{% endif %}>
+          开源本地 Piper{% if not tts_providers.piper %} · 未安装{% endif %}</option>
+      </select>
+      <span class="hint">未安装的方案会自动回退为浏览器语音，不影响作答。</span>
+    </label>
+  </div>
+  <div class="choice-row">
+    <label class="choice"><input type="checkbox" id="f-shuffle"><span>打乱顺序</span></label>
+    <label class="choice"><input type="checkbox" id="f-followup"><span>附加追问（2 条深挖题）</span></label>
+  </div>
+  {% if not ai_available %}
+  <p class="hint">当前为非 AI 模式：简历模式将只使用题库随机题（可在「设置」切换 AI 模式并配置 API Key）。</p>
+  {% endif %}
+  <div class="row">
+    <button class="btn primary big" id="btn-start">开始模拟面试</button>
+    <span class="muted small" id="start-info"></span>
+  </div>
+</section>
+
+{% if sessions %}
+<section class="card">
+  <h2>历史模拟</h2>
+  <table class="tbl">
+    <thead><tr><th>标题</th><th>模式</th><th>进度</th><th>开始时间</th><th>操作</th></tr></thead>
+    <tbody>
+    {% for s in sessions %}
+      <tr>
+        <td>{{ s.title }}</td>
+        <td><span class="chip">{{ {'whole': '整场', 'bank': '题库', 'resume': '简历+AI'}.get(s.mode, s.mode) }}</span></td>
+        <td>{{ s.answered_count }} / {{ s.question_count }}
+          {% if s.status == 'finished' %}<span class="chip s-confirmed">已结束</span>{% endif %}</td>
+        <td class="muted small">{{ (s.started_at or '')[:16] }}</td>
+        <td class="ops">
+          <a class="btn small" href="/mock/{{ s.id }}">继续/查看</a>
+          <a class="btn small" href="/mock/{{ s.id }}/report">报告</a>
+          <button class="btn small danger" data-del="{{ s.id }}">删除</button>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+const $ = (id) => document.getElementById(id);
+let parsedResumeId = '';
+
+function setMode(mode) {
+  document.querySelectorAll('.mode-card').forEach(c => c.classList.toggle('active', c.dataset.mode === mode));
+  $('pane-whole').style.display = mode === 'whole' ? 'block' : 'none';
+  $('pane-resume').style.display = mode === 'resume' ? 'block' : 'none';
+}
+document.querySelectorAll('input[name=mode]').forEach(r => r.addEventListener('change', () => setMode(r.value)));
+
+$('f-ai-ratio').addEventListener('input', () => {
+  const v = Number($('f-ai-ratio').value);
+  $('ai-ratio-hint').textContent = `${Math.round(v * 100)}% AI 生成 + ${Math.round((1 - v) * 100)}% 题库随机`;
+});
+
+$('btn-parse-resume').addEventListener('click', async () => {
+  const info = $('resume-info');
+  const file = $('f-resume-file').files[0];
+  const text = $('f-resume-text').value.trim();
+  info.textContent = '解析中…';
+  try {
+    let payload = {};
+    if (file) {
+      const dataUrl = await new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(fr.result);
+        fr.onerror = () => reject(new Error('读取文件失败'));
+        fr.readAsDataURL(file);
+      });
+      payload = {name: file.name, data_url: dataUrl};
+    } else if (text) {
+      payload = {name: '粘贴的简历', content: text};
+    } else {
+      info.textContent = '请先选择文件或粘贴文本';
+      return;
+    }
+    const d = await postJSON('/api/resumes', payload);
+    parsedResumeId = d.resume_id;
+    $('f-skills').value = (d.skills || []).join(', ');
+    $('f-projects').value = (d.projects || []).join(', ');
+    $('resume-parsed').style.display = 'block';
+    info.textContent = `解析成功：${d.chars} 字，技能 ${d.skills.length} 项，项目 ${d.projects.length} 个` +
+      (d.years ? `，约 ${d.years} 年经验` : '');
+  } catch (e) { info.textContent = '失败：' + e.message; }
+});
+
+$('btn-start').addEventListener('click', async () => {
+  const mode = document.querySelector('input[name=mode]:checked').value;
+  const info = $('start-info');
+  info.textContent = '生成题目中…';
+  const payload = {
+    mode,
+    interview_id: $('f-interview').value,
+    resume_id: parsedResumeId || $('f-resume').value || null,
+    count: Number($('f-count').value || 8),
+    shuffle: $('f-shuffle').checked,
+    include_follow_up: $('f-followup').checked,
+    ai_ratio: Number($('f-ai-ratio').value),
+    tts: $('f-tts').value,
+  };
+  try {
+    if (mode === 'resume' && $('resume-parsed').style.display !== 'none') {
+      await postJSON('/api/resumes/' + parsedResumeId, {
+        skills: $('f-skills').value, projects: $('f-projects').value,
+      });
+    }
+    const d = await postJSON('/api/mock/sessions', payload);
+    location.href = '/mock/' + d.session_id;
+  } catch (e) { info.textContent = ''; alert(e.message); }
+});
+
+document.querySelectorAll('[data-del]').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    if (!confirm('删除这条模拟记录？')) return;
+    try { await postJSON('/api/mock/sessions/' + btn.dataset.del + '/delete', {}); location.reload(); }
+    catch (e) { alert(e.message); }
+  });
+});
+</script>
+{% endblock %}
