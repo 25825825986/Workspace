@@ -523,11 +523,13 @@ def api_interview_data(iid: str):
 
 def _settings_payload() -> dict:
     settings = settings_store.load()
+    base_info = config.llm_base_url_info()
     return {"settings": settings, "masked_key": settings_store.masked_key(),
             "has_api_key": config.has_llm(), "ai_mode": config.ai_mode(),
             "extractor_mode": config.extractor_mode(), "extractor_label": config.extractor_label(),
             "mode_badge": config.mode_badge(),
             "base_url_effective": config.llm_base_url(), "model_effective": config.llm_model(),
+            "base_url_note": base_info.get("note"), "base_url_raw": base_info.get("raw"),
             "data_dir": settings_store.data_dir()}
 
 
@@ -587,13 +589,21 @@ def api_save_api_key():
 
 @app.route("/api/settings/test", methods=["POST"])
 def api_test_llm():
-    """「测试连接」：用表单里的临时值或已保存值做一次最小请求。"""
+    """「测试连接」：用表单里的临时值或已保存值做一次最小请求 + 模型 ID 校验。"""
     data = request.get_json(silent=True) or {}
     result = llm_mod.test_connection(
         api_key=data.get("api_key") or None,
         base_url=data.get("base_url") or None,
         model=data.get("model") or None,
     )
+    return jsonify(result), (200 if result.get("ok") else 400)
+
+
+@app.route("/api/settings/models")
+def api_list_models():
+    """拉取平台可用模型列表（零依赖 HTTP），供设置页下拉选择。"""
+    result = llm_mod.list_models(api_key=request.args.get("api_key") or None,
+                                 base_url=request.args.get("base_url") or None)
     return jsonify(result), (200 if result.get("ok") else 400)
 
 

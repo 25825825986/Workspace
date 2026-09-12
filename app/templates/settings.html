@@ -54,10 +54,21 @@
 
 <section class="card">
   <h2>③ 模型 API</h2>
-  <p class="muted small">OpenAI 兼容协议。留空则使用 <code>.env</code> 或内置默认（默认地址 {{ base_url_effective }}）。</p>
+  <p class="muted small">OpenAI 兼容协议。<b>Base URL 只填到版本段</b>（如 <code>https://api.siliconflow.cn/v1</code>），
+    模型 ID 单独填在「模型名」（部分平台要求带厂商前缀，如 <code>deepseek-ai/DeepSeek-V3</code>）。</p>
+  {% if base_url_note %}
+  <p class="hint warn-text">已自动修正地址：{{ base_url_note }}<br>
+    当前实际使用：<code>{{ base_url_effective }}</code>（建议点「保存设置」把修正结果写入配置）</p>
+  {% endif %}
   <div class="grid2">
     <label>Base URL <input id="f-base-url" value="{{ settings.llm.base_url }}" placeholder="{{ base_url_effective }}"></label>
-    <label>模型名 <input id="f-model" value="{{ settings.llm.model }}" placeholder="{{ model_effective }}"></label>
+    <label>模型名
+      <span class="row-inline">
+        <input id="f-model" list="model-options" value="{{ settings.llm.model }}" placeholder="{{ model_effective }}">
+        <button class="btn small" type="button" id="btn-models">拉取可用模型</button>
+      </span>
+      <datalist id="model-options"></datalist>
+    </label>
   </div>
   <label>API Key
     <span class="row-inline">
@@ -176,11 +187,42 @@ $('btn-test').addEventListener('click', async function () {
     const d = await r.json();
     info.textContent = (d.ok ? '连接正常：' : '连接失败：') + (d.message || '');
     info.classList.toggle('warn-text', !d.ok);
+    if (d.models && d.models.length) {
+      const list = document.getElementById('model-options');
+      list.innerHTML = d.models.map(m => `<option value="${m}"></option>`).join('');
+      if (!d.ok) info.textContent += '（已把候选模型填进模型名下拉框）';
+    }
     ui.toast(d.ok ? '模型连接测试通过' : (d.message || '连接失败'),
-             { type: d.ok ? 'success' : 'error' });
+             { type: d.ok ? 'success' : 'error', duration: d.ok ? 4000 : 12000 });
   } catch (e) {
     info.textContent = '测试失败：' + e.message;
     ui.toast('测试失败：' + e.message, { type: 'error' });
+  }
+  ui.loading(this, false);
+});
+
+$('btn-models').addEventListener('click', async function () {
+  ui.loading(this, true, '拉取中…');
+  try {
+    const params = new URLSearchParams();
+    const base = $('f-base-url').value.trim();
+    const key = $('f-api-key').value.trim();
+    if (base) params.set('base_url', base);
+    if (key) params.set('api_key', key);
+    const r = await fetch('/api/settings/models?' + params.toString());
+    const d = await r.json();
+    if (!d.ok) {
+      ui.toast(d.message || '拉取失败', { type: 'error', duration: 12000 });
+      return;
+    }
+    const list = document.getElementById('model-options');
+    list.innerHTML = (d.models || []).map(m => `<option value="${m}"></option>`).join('');
+    const current = $('f-model').value.trim();
+    ui.toast(`已拉取 ${d.models.length} 个模型，可在「模型名」下拉选择`
+      + (current && !d.models.includes(current) ? '（当前填写的模型不在列表中）' : ''),
+      { type: 'success', duration: 8000 });
+  } catch (e) {
+    ui.toast('拉取失败：' + e.message, { type: 'error' });
   }
   ui.loading(this, false);
 });

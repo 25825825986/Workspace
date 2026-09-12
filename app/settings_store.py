@@ -16,7 +16,8 @@ from pathlib import Path
 from typing import Any
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / "data"
+# 与 config.DATA_DIR 同一口径：环境变量可覆盖（自动化测试用独立目录，避免误动真实数据与密钥）
+DATA_DIR = Path(os.getenv("AI_REVIEW_DATA_DIR") or (BASE_DIR / "data"))
 SETTINGS_PATH = DATA_DIR / "settings.json"
 SECRETS_PATH = DATA_DIR / "secrets.json"
 

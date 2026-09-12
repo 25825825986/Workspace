@@ -48,12 +48,25 @@ python run.py
 
 | 脚本 | 作用 |
 |------|------|
-| `python scripts/smoke_e2e.py` | 后端全链路断言（109 项） |
+| `python scripts/smoke_e2e.py` | 后端全链路断言（116 项，使用独立 `.test-data/`，不动真实数据） |
+| `python scripts/llm_diag.py` | **模型 API 诊断**：配置解析 + 模型列表校验 + 最小对话测试 |
+| `python scripts/llm_e2e_check.py` | **真实模型端到端**：function calling + 完整 AI 抽取入库（需联网与 Key） |
 | `python scripts/ui_kit_check.py` | UI Kit 真实浏览器行为检查（Toast/弹层/抽屉/命令面板） |
 | `python scripts/screenshot_ui.py [--dark\|--mobile]` | 生成 30 张界面截图并做 DOM 校验 |
 | `python scripts/ui_audit.py` | 像素审计（空白/溢出/截断/留白/对比度/主题） |
 | `python scripts/design_audit.py` | 设计量化证据（组件计数、token、无障碍覆盖） |
 | `python scripts/dev_seed.py` | 灌入演示数据（会清空 `data/`） |
+
+## 模型 API 配置要点（常见坑）
+
+1. **Base URL 只填到版本段**，不要带模型路径：
+   ✅ `https://api.siliconflow.cn/v1`　❌ `https://api.siliconflow.cn/v1/deepseek-ai/DeepSeek-V4-Flash`
+   （填错会 404；本应用会自动截断并提示）
+2. **模型 ID 单独填在「模型名」**，部分平台要求带厂商前缀：`deepseek-ai/DeepSeek-V4-Flash`。
+   不确定就点设置页的「拉取可用模型」直接选。
+3. 配置后点「测试连接」：它会先校验模型 ID 是否存在，再做一次最小对话，并给出可操作的错误说明。
+4. 排查顺序：`python scripts/llm_diag.py` → 设置页「测试连接」→ `python scripts/llm_e2e_check.py`。
+   详细记录见 `docs/13-llm-config-fix.md`。
 
 ## 启用 AI 提取（可选）
 

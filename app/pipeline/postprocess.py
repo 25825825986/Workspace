@@ -46,6 +46,16 @@ def assemble(items: list[dict], turns: list[dict],
     turn_by_idx = {t["idx"]: t for t in turns}
     out: list[dict] = []
     for seq, item in enumerate(items, start=1):
+        # 归一化：LLM 有时把面试官的"你有什么想问我们的吗"邀请话术当成反问问题。
+        # 此时应把候选人的提问当问题（与规则路径一致），邀请本身不单独成题。
+        if ((item.get("direction") or "normal") == "reverse"
+                and knowledge.is_reverse_invite(item.get("q_text", ""))
+                and item.get("answers")):
+            candidate = str(item["answers"][0].get("text") or "").strip()
+            if candidate and not knowledge.is_reverse_invite(candidate):
+                item = {**item, "q_text": candidate, "answers": [], "q_turn": None,
+                        "confidence": min(float(item.get("confidence") or 0.5), 0.7)}
+
         direction = item.get("direction") or "normal"
         q_role = "self" if direction == "reverse" else "interviewer"      # 提问方
         a_role = "interviewer" if direction == "reverse" else "self"      # 回答方

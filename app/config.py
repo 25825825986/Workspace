@@ -9,11 +9,13 @@ Phase 5：LLM 相关配置改为**函数式读取**（设置页 > .env > 默认�
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent          # 项目根（含 docs/ data/ app/）
 APP_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
+# 数据目录可用环境变量覆盖（测试用独立目录，避免误动真实数据与密钥）
+DATA_DIR = Path(os.getenv("AI_REVIEW_DATA_DIR") or (BASE_DIR / "data"))
 RAW_DIR = DATA_DIR / "raw"                                # data/raw/<interview_id>.txt 原文存档
 EXPORT_DIR = DATA_DIR / "export"                          # data/export/*.md 导出产物
 DB_PATH = DATA_DIR / "app.db"                             # SQLite 单文件库
@@ -54,8 +56,51 @@ def llm_api_key() -> str:
 
 
 def llm_base_url() -> str:
-    value = str((_settings().get("llm") or {}).get("base_url") or "").strip()
-    return value or os.getenv("LLM_BASE_URL", "").strip() or DEFAULT_BASE_URL
+    return llm_base_url_info()["url"]
+
+
+def llm_base_url_info() -> dict:
+    """返回规范化后的 API 根地址与修正说明。
+
+    本次实测遇到的误填：把模型路径抄进地址，例如
+    `https://api.siliconflow.cn/v1/deepseek-ai/DeepSeek-V4-Flash`
+    → 规范化后应是 `https://api.siliconflow.cn/v1`（否则请求会 404）。
+    """
+    raw = str((_settings().get("llm") or {}).get("base_url") or "").strip()
+    if not raw:
+        raw = os.getenv("LLM_BASE_URL", "").strip() or DEFAULT_BASE_URL
+    url, note = normalize_base_url(raw)
+    return {"url": url, "raw": raw, "note": note}
+
+
+def normalize_base_url(raw: str) -> tuple[str, str | None]:
+    """把用户填写的地址规整为 OpenAI 兼容 API 根地址。
+
+    - 去掉 `/chat/completions`、`/completions`、`/models` 等端点后缀；
+    - 若版本段（如 `/v1`）之后还跟着路径（通常是模型 ID），截断到版本段。
+    """
+    from urllib.parse import urlsplit, urlunsplit
+
+    text = (raw or "").strip().rstrip("/")
+    if not text:
+        return DEFAULT_BASE_URL, None
+    note: str | None = None
+
+    for suffix in ("/chat/completions", "/completions", "/models", "/embeddings"):
+        if text.endswith(suffix):
+            text = text[: -len(suffix)]
+            note = f"已自动去掉端点后缀 {suffix}"
+
+    parts = urlsplit(text)
+    segments = [seg for seg in parts.path.split("/") if seg]
+    version_idx = next((i for i, seg in enumerate(segments) if re.fullmatch(r"v\d+", seg)), None)
+    if version_idx is not None and version_idx + 1 < len(segments):
+        dropped = "/".join(segments[version_idx + 1:])
+        segments = segments[: version_idx + 1]
+        note = (f"已自动截断到 API 根地址（原地址里多出的 “{dropped}” 通常是模型 ID，"
+                "请填在「模型名」中）")
+    path = "/" + "/".join(segments) if segments else ""
+    return urlunsplit((parts.scheme, parts.netloc, path, "", "")), note
 
 
 def llm_model() -> str:

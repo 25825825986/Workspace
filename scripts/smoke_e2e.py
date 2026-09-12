@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
 import re
 import shutil
 import sys
@@ -20,12 +21,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-# 隔离运行：每次从空库开始，便于重复执行
-_DATA = ROOT / "data"
-shutil.rmtree(_DATA, ignore_errors=True)
+# 隔离运行：使用独立数据目录（.test-data），绝不触碰真实的 data/ 与其中的 API Key
+TEST_DATA = ROOT / ".test-data"
+shutil.rmtree(TEST_DATA, ignore_errors=True)
+os.environ["AI_REVIEW_DATA_DIR"] = str(TEST_DATA)
 
 from app.main import app  # noqa: E402
-from app import repository  # noqa: E402
+from app import config, repository  # noqa: E402
 
 SAMPLE = (ROOT / "app" / "static" / "sample_transcript.txt").read_text(encoding="utf-8")
 client = app.test_client()
@@ -243,7 +245,7 @@ check("答案隐藏开关与复习模式按钮存在",
       "data-toggle-answer" in lst_html and "全部隐藏答案" in lst_html and "answer-mask" in lst_html)
 search_html = client.get("/?q=不存在的公司名").get_data(as_text=True)
 check("记录页搜索无结果时给出空状态", "没有匹配的面试记录" in search_html)
-export_dir = ROOT / "data" / "export"
+export_dir = TEST_DATA / "export"
 check("导出文件已落盘 data/export/", export_dir.exists() and any(export_dir.glob("*.md")),
       str(list(export_dir.glob('*'))[:3] if export_dir.exists() else "missing"))
 
@@ -298,8 +300,8 @@ r = client.post("/api/settings/api-key", json={"api_key": ""})
 check("清除 Key 后回退", r.get_json()["has_api_key"] is False
       and r.get_json()["masked_key"] == "", str(r.get_json())[:160])
 
-settings_file = ROOT / "data" / "settings.json"
-secrets_file = ROOT / "data" / "secrets.json"
+settings_file = TEST_DATA / "settings.json"
+secrets_file = TEST_DATA / "secrets.json"
 conf = json.loads(settings_file.read_text(encoding="utf-8"))
 check("设置原子落盘 data/settings.json（结构完整）",
       settings_file.exists() and set(conf) >= {"theme", "ai_mode", "llm"} and secrets_file.exists(),
@@ -476,6 +478,32 @@ check("无障碍基座：aria-live / skip-link / focus-visible / reduced-motion"
       and ":focus-visible" in css and "prefers-reduced-motion" in css)
 check("底部 Tab / 浮动菜单 / 暗色 on-brand token",
       ".tabbar" in css and "--on-brand" in css and "data-popover" in css)
+
+# 14) 模型 API 配置健壮性（base_url 规范化与诊断提示，离线可测）
+cases = [
+    ("https://api.siliconflow.cn/v1/deepseek-ai/DeepSeek-V4-Flash",
+     "https://api.siliconflow.cn/v1"),
+    ("https://api.deepseek.com/v1/chat/completions", "https://api.deepseek.com/v1"),
+    ("https://api.deepseek.com/v1/", "https://api.deepseek.com/v1"),
+    ("https://api.openai.com/v1", "https://api.openai.com/v1"),
+]
+for raw, expected in cases:
+    got, note = config.normalize_base_url(raw)
+    check(f"base_url 规范化：{raw[:38]}…", got == expected, f"{got} != {expected}（note={note}）")
+check("误填模型路径时给出修正说明",
+      config.normalize_base_url(cases[0][0])[1] is not None)
+
+saved = client.post("/api/settings", json={
+    "base_url": "https://api.siliconflow.cn/v1/deepseek-ai/Test-Model",
+    "model": "Test-Model"}).get_json()
+check("保存含模型路径的地址后自动规范化并提示",
+      saved["base_url_effective"] == "https://api.siliconflow.cn/v1"
+      and bool(saved.get("base_url_note")), str(saved)[:220])
+miss = client.get("/api/settings/models")
+check("未配置 Key 时模型列表接口返回 400 + 提示",
+      miss.status_code == 400 and "Key" in (miss.get_json() or {}).get("message", ""),
+      str(miss.get_json())[:160])
+client.post("/api/settings/reset", json={})
 
 print()
 print(f"共 {len(passed) + len(failed)} 项断言：通过 {len(passed)} / 失败 {len(failed)}")
