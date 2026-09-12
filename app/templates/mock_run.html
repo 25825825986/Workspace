@@ -37,8 +37,9 @@
       <div class="progress"><i id="prog" style="width: {{ (answered / (turns|length or 1) * 100) | round }}%"></i></div>
     </div>
     <div class="ops">
-      <span class="timer" id="timer">00:00</span>
-      <button class="btn" id="btn-finish" data-confirm="结束本轮模拟并生成报告？">结束并生成报告</button>
+      <span class="timer" id="timer" aria-live="off">00:00</span>
+      <span class="muted small" id="save-state">未修改</span>
+      <button class="btn" id="btn-finish" data-finish="1">结束并生成报告</button>
     </div>
   </div>
 </section>
@@ -53,7 +54,7 @@
       {% if current.mark %}<span class="chip">{{ {'good': '掌握', 'unsure': '不确定', 'blank': '不会'}.get(current.mark, current.mark) }}</span>{% endif %}
     </div>
     <div class="q-tools">
-      <button class="btn small" id="btn-speak">🔊 播报问题</button>
+      <button class="btn small" id="btn-speak"><svg class="ico" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><use href="#i-play"></use></svg>播报问题</button>
       <button class="btn small" id="btn-stop">停止</button>
     </div>
   </div>
@@ -123,13 +124,13 @@ setInterval(() => {
   $('timer').textContent = `${m}:${s}`;
 }, 1000);
 
-/* 语音播报：浏览器内置（零依赖）。服务端 edge-tts 未安装时自动降级提示。 */
+/* 语音播报：浏览器内置（零依赖）。服务端 edge-tts / Piper 未安装时自动降级提示。 */
 function speak(text) {
-  if (TTS === 'none') { alert('当前已选择「静音」模式，可在模拟设置里改为浏览器语音。'); return; }
+  if (TTS === 'none') { ui.toast('当前为「静音」模式，可在模拟设置里改为浏览器语音', { type: 'error' }); return; }
   if (TTS === 'edge' || TTS === 'piper') {
-    alert((TTS === 'edge' ? '服务端 edge-tts' : '开源本地 Piper') + ' 未安装，本次使用浏览器语音播报。');
+    ui.toast((TTS === 'edge' ? '服务端 edge-tts' : '开源本地 Piper') + ' 未安装，已改用浏览器语音播报');
   }
-  if (!('speechSynthesis' in window)) { alert('当前浏览器不支持语音合成，请使用 Chrome/Edge。'); return; }
+  if (!('speechSynthesis' in window)) { ui.toast('当前浏览器不支持语音合成，请使用 Chrome/Edge', { type: 'error' }); return; }
   window.speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text);
   u.lang = 'zh-CN';
@@ -146,28 +147,60 @@ document.querySelectorAll('.mark-btn').forEach(btn => {
   });
 });
 
-async function save(goNext) {
-  const info = $('save-info');
-  info.textContent = '保存中…';
+async function save(goNext, btn) {
+  ui.loading(btn, true, '保存中…');
   try {
     await postJSON('/api/mock/turns/' + TURN_ID, {
       my_answer: $('answer').value, elapsed_sec: seconds, mark: mark || null,
     });
+    ui.markSaved();
     const next = {{ (idx + 2) }};
     location.href = goNext ? ('/mock/' + SESSION_ID + '?i=' + next) : ('/mock/' + SESSION_ID);
-  } catch (e) { info.textContent = ''; alert(e.message); }
+  } catch (e) { ui.loading(btn, false); }
 }
-$('btn-save-next').addEventListener('click', () => save(true));
+$('btn-save-next').addEventListener('click', function () { save(true, this); });
 document.addEventListener('keydown', (e) => {
-  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); save(true); }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); save(true, $('btn-save-next')); }
 });
-document.querySelectorAll('[data-confirm]').forEach(async (btn) => {
+document.querySelectorAll('[data-finish]').forEach(btn => {
   btn.addEventListener('click', async () => {
-    if (!confirm(btn.dataset.confirm)) return;
+    const ok = await ui.confirm({
+      title: '结束本轮模拟',
+      message: '结束后将生成模拟报告；未作答的题目会记为"需要加强"。',
+      confirmText: '结束并生成报告',
+    });
+    if (ok === null) return;
+    ui.loading(btn, true, '生成中…');
     try {
       await postJSON('/api/mock/sessions/' + SESSION_ID + '/finish', {});
       location.href = '/mock/' + SESSION_ID + '/report';
-    } catch (e) { alert(e.message); }
+    } catch (e) { ui.loading(btn, false); }
+  });
+});
+/* 作答内容自动保存（停止输入约 1 秒后），并给出"已保存"反馈 */
+(function bindAnswerAutosave() {
+  const answer = $('answer');
+  if (!answer || !TURN_ID) return;
+  let timer = null;
+  answer.addEventListener('input', () => {
+    ui.markDirty();
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      try {
+        await postJSON('/api/mock/turns/' + TURN_ID, { my_answer: answer.value, elapsed_sec: seconds });
+        ui.markSaved();
+      } catch (e) { /* 已提示 */ }
+    }, 900);
+  });
+})();
+/* 标记变化即保存（避免忘记点保存） */
+document.querySelectorAll('.mark-btn').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    if (!TURN_ID) return;
+    try {
+      await postJSON('/api/mock/turns/' + TURN_ID, { mark: mark || null, elapsed_sec: seconds });
+      ui.markSaved();
+    } catch (e) { /* 已提示 */ }
   });
 });
 </script>

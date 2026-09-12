@@ -15,14 +15,17 @@
 <section class="card">
   <h2>① 主题外观</h2>
   <p class="muted small">选择后立即生效并持久保存；「跟随系统」会随操作系统的深浅色设置自动切换。</p>
-  <div class="choice-row" id="theme-group">
-    {% for t, label in [('light', '浅色'), ('dark', '深色'), ('system', '跟随系统')] %}
-    <label class="choice">
-      <input type="radio" name="theme" value="{{ t }}" {{ 'checked' if settings.theme == t else '' }}>
-      <span>{{ label }}</span>
-    </label>
-    {% endfor %}
-  </div>
+  <fieldset id="theme-group">
+    <legend class="sr-only">主题外观</legend>
+    <div class="choice-row">
+      {% for t, label in [('light', '浅色'), ('dark', '深色'), ('system', '跟随系统')] %}
+      <label class="choice">
+        <input type="radio" name="theme" value="{{ t }}" {{ 'checked' if settings.theme == t else '' }}>
+        <span>{{ label }}</span>
+      </label>
+      {% endfor %}
+    </div>
+  </fieldset>
 </section>
 
 <section class="card">
@@ -31,16 +34,19 @@
     当前解析方式：<b>{{ extractor_label }}</b>。
     「非 AI 模式」完全离线，只用规则切分与本地判定；需要 AI 抽取/推断时请选择「自动」或「强制 AI」并配置 API Key。
   </p>
-  <div class="choice-row" id="ai-mode-group">
-    {% for m, label, desc in [('auto', '自动', '有 API Key 时用 AI，无 Key 时自动回退规则'),
-                              ('on', '强制 AI', '始终调用大模型（未配置 Key 会明确报错）'),
-                              ('off', '非 AI 模式', '纯本地规则，不联网')] %}
-    <label class="choice">
-      <input type="radio" name="ai_mode" value="{{ m }}" {{ 'checked' if settings.ai_mode == m else '' }}>
-      <span>{{ label }}<i class="muted small">{{ desc }}</i></span>
-    </label>
-    {% endfor %}
-  </div>
+  <fieldset id="ai-mode-group">
+    <legend class="sr-only">AI 模式</legend>
+    <div class="choice-row">
+      {% for m, label, desc in [('auto', '自动', '有 API Key 时用 AI，无 Key 时自动回退规则'),
+                                ('on', '强制 AI', '始终调用大模型（未配置 Key 会明确报错）'),
+                                ('off', '非 AI 模式', '纯本地规则，不联网')] %}
+      <label class="choice">
+        <input type="radio" name="ai_mode" value="{{ m }}" {{ 'checked' if settings.ai_mode == m else '' }}>
+        <span>{{ label }}<i class="muted small">{{ desc }}</i></span>
+      </label>
+      {% endfor %}
+    </div>
+  </fieldset>
   {% if not has_api_key and settings.ai_mode != 'off' %}
   <p class="hint warn-text">当前尚未配置 API Key，AI 模式会回退为规则切分。</p>
   {% endif %}
@@ -120,9 +126,10 @@ document.querySelectorAll('input[name=theme]').forEach(r => {
   r.addEventListener('change', () => applyTheme(r.value));
 });
 
-$('btn-save').addEventListener('click', async () => {
+$('btn-save').addEventListener('click', async function () {
   const theme = document.querySelector('input[name=theme]:checked').value;
   const aiMode = document.querySelector('input[name=ai_mode]:checked').value;
+  ui.loading(this, true, '保存中…');
   try {
     const data = await postJSON('/api/settings', {
       theme, ai_mode: aiMode,
@@ -133,23 +140,30 @@ $('btn-save').addEventListener('click', async () => {
       await postJSON('/api/settings/api-key', {api_key: key});
       $('f-api-key').value = '';
     }
-    showMsg('已保存：' + data.mode_badge.text + '（主题：' + theme + '）');
-    setTimeout(() => location.reload(), 600);
-  } catch (e) { showErr(e.message); }
+    ui.loading(this, false);
+    ui.toast('已保存：' + data.mode_badge.text + '（主题：' + theme + '）', { type: 'success' });
+    setTimeout(() => location.reload(), 700);
+  } catch (e) { ui.loading(this, false); }
 });
 
 $('btn-clear-key').addEventListener('click', async () => {
-  if (!confirm('确定清除已保存的 API Key？清除后将回退为规则解析（除非 .env 中另有配置）。')) return;
+  const ok = await ui.confirm({
+    title: '清除 API Key',
+    message: '清除后将回退为规则解析（除非 .env 中另有配置）。',
+    confirmText: '清除', danger: true,
+  });
+  if (ok === null) return;
   try {
     await postJSON('/api/settings/api-key', {api_key: ''});
-    showMsg('API Key 已清除。');
-    setTimeout(() => location.reload(), 600);
-  } catch (e) { showErr(e.message); }
+    ui.toast('API Key 已清除', { type: 'success' });
+    setTimeout(() => location.reload(), 700);
+  } catch (e) { /* 已提示 */ }
 });
 
-$('btn-test').addEventListener('click', async () => {
+$('btn-test').addEventListener('click', async function () {
   const info = $('test-result');
-  info.textContent = '测试中…';
+  ui.loading(this, true, '测试中…');
+  info.textContent = '';
   try {
     const r = await fetch('/api/settings/test', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -160,18 +174,29 @@ $('btn-test').addEventListener('click', async () => {
       }),
     });
     const d = await r.json();
-    info.textContent = (d.ok ? '✅ ' : '⚠️ ') + (d.message || '');
+    info.textContent = (d.ok ? '连接正常：' : '连接失败：') + (d.message || '');
     info.classList.toggle('warn-text', !d.ok);
-  } catch (e) { info.textContent = '测试失败：' + e.message; }
+    ui.toast(d.ok ? '模型连接测试通过' : (d.message || '连接失败'),
+             { type: d.ok ? 'success' : 'error' });
+  } catch (e) {
+    info.textContent = '测试失败：' + e.message;
+    ui.toast('测试失败：' + e.message, { type: 'error' });
+  }
+  ui.loading(this, false);
 });
 
 $('btn-reset').addEventListener('click', async () => {
-  if (!confirm('恢复默认设置（主题=跟随系统、AI 模式=自动、模型参数清空）？API Key 不会被清除。')) return;
+  const ok = await ui.confirm({
+    title: '恢复默认设置',
+    message: '恢复为：主题跟随系统、AI 模式自动、模型参数清空。API Key 不会被清除。',
+    confirmText: '恢复默认',
+  });
+  if (ok === null) return;
   try {
     await postJSON('/api/settings/reset', {});
-    showMsg('已恢复默认设置。');
-    setTimeout(() => location.reload(), 600);
-  } catch (e) { showErr(e.message); }
+    ui.toast('已恢复默认设置', { type: 'success' });
+    setTimeout(() => location.reload(), 700);
+  } catch (e) { /* 已提示 */ }
 });
 </script>
 {% endblock %}

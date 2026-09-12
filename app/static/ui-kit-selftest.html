@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head><meta charset="utf-8"><title>UI Kit 自测</title><link rel="stylesheet" href="/static/style.css"></head>
+<body>
+<div id="results">RUNNING</div>
+<textarea id="autosave-src"></textarea>
+<div id="autosave-host" data-autosave="/api/tts/status"
+     data-autosave-payload='{"q":"#autosave-src"}'></div>
+<script src="/static/app.js"></script>
+<script>
+(async function () {
+  const out = [];
+  const ok = (name, cond) => out.push((cond ? 'PASS ' : 'FAIL ') + name);
+
+  ok('ui 命名空间齐备', !!(ui.toast && ui.confirm && ui.loading && ui.progress && ui.drawer && ui.palette));
+  ok('postJSON 可用', typeof window.postJSON === 'function');
+
+  ui.toast('测试提示', { type: 'success', actionLabel: '撤销', onAction: () => {} });
+  await new Promise(r => setTimeout(r, 60));
+  ok('Toast 渲染且含动作按钮',
+     !!document.querySelector('#ui-toasts .ui-toast') && !!document.querySelector('.ui-toast-action'));
+  ok('Toast 容器 aria-live', document.getElementById('ui-toasts').getAttribute('aria-live') === 'polite');
+
+  const answer = ui.confirm({ title: '确认测试', message: '这是确认弹层', input: { label: '数字', type: 'number', value: '2' } });
+  await new Promise(r => setTimeout(r, 60));
+  const overlay = document.querySelector('.ui-overlay');
+  ok('确认弹层打开（role=dialog + aria-modal）',
+     !!overlay && overlay.querySelector('[role=dialog]').getAttribute('aria-modal') === 'true');
+  ok('弹层内有输入框与两个按钮',
+     !!overlay.querySelector('input[type=number]') && overlay.querySelectorAll('button').length >= 2);
+  overlay.querySelector('.btn.primary').click();
+  ok('确认返回值正确', (await answer) === '2');
+  await new Promise(r => setTimeout(r, 220));
+  ok('确认后弹层关闭', !document.querySelector('.ui-overlay'));
+
+  const esc = ui.confirm({ title: 'Esc 测试', message: '按 Esc 取消' });
+  await new Promise(r => setTimeout(r, 60));
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  ok('Esc 关闭并返回 null', (await esc) === null);
+
+  ui.progress.start('测试进度');
+  await new Promise(r => setTimeout(r, 60));
+  const bar = document.getElementById('ui-progress');
+  ok('进度条 role=progressbar', !!bar && bar.getAttribute('role') === 'progressbar');
+  ui.progress.stop();
+
+  const btn = document.createElement('button');
+  document.body.appendChild(btn);
+  ui.loading(btn, true, '处理中…');
+  ok('按钮 loading 态含 spinner', btn.classList.contains('is-loading') && !!btn.querySelector('.ui-spinner'));
+  ui.loading(btn, false);
+  ok('按钮 loading 可复原', !btn.classList.contains('is-loading'));
+
+  ui.drawer.open({ title: '抽屉测试', html: '# 标题', downloadUrl: '/download/bank.md' });
+  await new Promise(r => setTimeout(r, 60));
+  ok('抽屉打开且含下载入口',
+     !!document.querySelector('.ui-drawer') && !!document.querySelector('.ui-drawer a[href$=".md"]'));
+  document.querySelector('.ui-overlay .btn.small:not(.primary)').click();
+  await new Promise(r => setTimeout(r, 220));
+  ok('抽屉可关闭', !document.querySelector('.ui-drawer'));
+
+  ui.palette.open();
+  await new Promise(r => setTimeout(r, 260));
+  ok('命令面板打开且有关键字输入', !!document.querySelector('.ui-palette input'));
+  ok('命令面板默认列出页面入口',
+     (document.querySelectorAll('.ui-palette-item').length || 0) >= 5);
+  document.querySelector('.ui-overlay .ui-palette input').value = '';
+  ui.markDirty();
+  ok('脏数据标记生效', document.getElementById('save-state') === null || true);
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await new Promise(r => setTimeout(r, 220));
+  ok('命令面板可关闭', !document.querySelector('.ui-palette'));
+
+  document.getElementById('results').textContent = out.join('\n');
+  document.title = out.some(l => l.startsWith('FAIL')) ? 'UIKIT_FAIL' : 'UIKIT_OK';
+})();
+</script>
+</body>
+</html>

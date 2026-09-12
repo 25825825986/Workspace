@@ -90,18 +90,7 @@ _SORT_SQL = {
 _QA_ALIVE = "q.interview_id=i.id AND q.deleted=0"
 
 
-def list_interviews(search: str | None = None, sort: str = "recent",
-                    only: str | None = None) -> list[dict]:
-    """面试记录列表：支持关键词搜索、排序与快筛（Phase 4）。"""
-    sql = f"""SELECT i.*,
-                 (SELECT COUNT(*) FROM qa_items q WHERE {_QA_ALIVE}) AS qa_count,
-                 (SELECT COUNT(*) FROM qa_items q WHERE {_QA_ALIVE}
-                   AND q.status IN ('pending','auto')) AS pending_count,
-                 (SELECT COUNT(*) FROM qa_items q WHERE {_QA_ALIVE}
-                   AND q.entry_id IS NOT NULL) AS merged_count,
-                 (SELECT COUNT(*) FROM qa_items q WHERE {_QA_ALIVE}
-                   AND q.answers='[]') AS blank_answer_count
-              FROM interviews i"""
+def _interview_filters(search: str | None, only: str | None) -> tuple[list[str], list[Any]]:
     where: list[str] = []
     params: list[Any] = []
     if search and search.strip():
@@ -118,12 +107,43 @@ def list_interviews(search: str | None = None, sort: str = "recent",
     elif only == "not_merged":
         where.append(f"(SELECT COUNT(*) FROM qa_items q WHERE {_QA_ALIVE} "
                      "AND q.entry_id IS NULL) > 0")
+    return where, params
+
+
+def list_interviews(search: str | None = None, sort: str = "recent",
+                    only: str | None = None, limit: int | None = None,
+                    offset: int = 0) -> list[dict]:
+    """面试记录列表：支持关键词搜索、排序、快筛与分页（Phase 8 优化）。"""
+    sql = f"""SELECT i.*,
+                 (SELECT COUNT(*) FROM qa_items q WHERE {_QA_ALIVE}) AS qa_count,
+                 (SELECT COUNT(*) FROM qa_items q WHERE {_QA_ALIVE}
+                   AND q.status IN ('pending','auto')) AS pending_count,
+                 (SELECT COUNT(*) FROM qa_items q WHERE {_QA_ALIVE}
+                   AND q.entry_id IS NOT NULL) AS merged_count,
+                 (SELECT COUNT(*) FROM qa_items q WHERE {_QA_ALIVE}
+                   AND q.answers='[]') AS blank_answer_count
+              FROM interviews i"""
+    where, params = _interview_filters(search, only)
     if where:
         sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY " + _SORT_SQL.get(sort, _SORT_SQL["recent"])
+    if limit:
+        sql += " LIMIT ? OFFSET ?"
+        params = params + [int(limit), int(offset)]
     with conn_ctx() as conn:
         rows = conn.execute(sql, params).fetchall()
     return _rows_to_dicts(rows)
+
+
+def count_interviews(search: str | None = None, only: str | None = None) -> int:
+    """与 list_interviews 同口径的总数（用于"加载更多"分页）。"""
+    where, params = _interview_filters(search, only)
+    sql = "SELECT COUNT(*) AS n FROM interviews i"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    with conn_ctx() as conn:
+        row = conn.execute(sql, params).fetchone()
+    return int(row["n"]) if row else 0
 
 
 def dashboard_stats() -> dict:
@@ -261,6 +281,11 @@ def renumber_seqs(interview_id: str) -> None:
 def soft_delete_qa(qid: str) -> None:
     """软删除误识别的问答（保留审计，不物理删除，R2 可追溯）。"""
     update_qa(qid, {"deleted": 1})
+
+
+def restore_qa(qid: str) -> None:
+    """撤销软删除（Phase 8：删除后可在 Toast 里一键撤销）。"""
+    update_qa(qid, {"deleted": 0})
 
 
 def merge_with_next(qid: str) -> dict:

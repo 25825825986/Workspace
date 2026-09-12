@@ -49,7 +49,7 @@
         {% if suspected or n.method == 'rule' %}
         <button class="btn small" data-confirm-sim="{{ n.entry.id }}" data-score="{{ n.score }}">确认为同一问题</button>
         {% endif %}
-        <button class="btn small danger" data-unlink="{{ n.entry.id }}">取消关联</button>
+        <button class="btn small danger" data-unlink="{{ n.entry.id }}" data-score="{{ n.score }}">取消关联</button>
       </div>
     </div>
     {% endfor %}
@@ -68,13 +68,14 @@
   <h2>历史作答对比 <span class="muted small">（共 {{ rows|length }} 次作答）</span></h2>
   <p class="muted small">忠实原文为逐字引用（含口误卡壳）；优化建议与批注独立成列——对比只看差异，不改写事实。</p>
   {% if rows %}
-  <table class="cmp-table">
+  <table class="cmp-table" id="cmp-table">
+    <caption class="sr-only">同一考点的历史作答对比</caption>
     <thead><tr>
       <th>来源面试</th><th>忠实原文回答</th><th>优化建议</th><th>批注 / 操作</th>
     </tr></thead>
     <tbody>
       {% for r in rows %}
-      <tr>
+      <tr class="{{ 'cmp-extra' if loop.index > 20 else '' }}" {% if loop.index > 20 %}hidden{% endif %}>
         <td>
           <a href="/interviews/{{ r.interview_id }}/qa/{{ r.id }}">{{ r.interview_title or '（未知面试）' }}</a>
           <div class="muted small">{{ (r.interview_at or r.interview_date or '')[:16] }}
@@ -100,6 +101,13 @@
   {% else %}
   <p class="muted small">该条目还没有关联到具体作答记录。</p>
   {% endif %}
+  {% if rows|length > 20 %}
+  <div class="row">
+    <button class="btn small" type="button" id="btn-show-all-rows">
+      显示全部 {{ rows|length }} 次作答（默认只显示最近 20 次）
+    </button>
+  </div>
+  {% endif %}
 </section>
 
 {% if entry.question_variants %}
@@ -115,13 +123,41 @@
 const ENTRY_ID = '{{ entry.id }}';
 const BEST_QA = '{{ entry.best_qa_id or "" }}';
 
+/* 长列表折叠：默认只显示最近 20 次作答 */
+var showAllBtn = document.getElementById('btn-show-all-rows');
+if (showAllBtn) {
+  showAllBtn.addEventListener('click', function () {
+    document.querySelectorAll('#cmp-table tr.cmp-extra').forEach(function (tr) {
+      tr.removeAttribute('hidden');
+    });
+    showAllBtn.remove();
+  });
+}
+
 document.querySelectorAll('[data-unlink]').forEach(btn => {
   btn.addEventListener('click', async () => {
-    if (!confirm('取消这条相似关联？')) return;
+    const ok = await ui.confirm({
+      title: '取消相似关联',
+      message: '取消后这两条问题将不再互相关联（可撤销）。',
+      confirmText: '取消关联',
+      danger: true,
+    });
+    if (ok === null) return;
     try {
-      await postJSON('/api/similar/unlink', {a_entry_id: ENTRY_ID, b_entry_id: btn.dataset.unlink});
-      location.reload();
-    } catch (e) { alert(e.message); }
+      const res = await postJSON('/api/similar/unlink', {
+        a_entry_id: ENTRY_ID, b_entry_id: btn.dataset.unlink,
+        score: Number(btn.dataset.score || 0.8),
+      });
+      ui.toast(res.message || '已取消关联', {
+        type: 'success', actionLabel: res.undo_url ? '撤销' : undefined,
+        onAction: res.undo_url ? async () => {
+          await postJSON(res.undo_url, res.undo_payload || {});
+          ui.toast('已恢复关联', { type: 'success' });
+          setTimeout(() => location.reload(), 400);
+        } : undefined,
+      });
+      setTimeout(() => location.reload(), 1100);
+    } catch (e) { /* 已提示 */ }
   });
 });
 
@@ -131,8 +167,9 @@ document.querySelectorAll('[data-confirm-sim]').forEach(btn => {
       await postJSON('/api/similar/confirm', {
         a_entry_id: ENTRY_ID, b_entry_id: btn.dataset.confirmSim, score: Number(btn.dataset.score || 0.8),
       });
-      location.reload();
-    } catch (e) { alert(e.message); }
+      ui.toast('已确认为同一问题', { type: 'success' });
+      setTimeout(() => location.reload(), 500);
+    } catch (e) { /* 已提示 */ }
   });
 });
 
@@ -142,8 +179,9 @@ document.querySelectorAll('[data-best]').forEach(btn => {
     const next = (BEST_QA === qaId) ? null : qaId;
     try {
       await postJSON('/api/entries/' + ENTRY_ID + '/best', {qa_id: next});
-      location.reload();
-    } catch (e) { alert(e.message); }
+      ui.toast(next ? '已标为最佳作答' : '已取消最佳标记', { type: 'success' });
+      setTimeout(() => location.reload(), 500);
+    } catch (e) { /* 已提示 */ }
   });
 });
 
@@ -152,7 +190,7 @@ document.getElementById('btn-sim-search').addEventListener('click', async () => 
   const info = document.getElementById('sim-info');
   const box = document.getElementById('sim-results');
   box.innerHTML = '';
-  if (!q) { info.textContent = '请输入问题文本'; return; }
+  if (!q) { ui.toast('请输入问题文本', { type: 'error' }); return; }
   info.textContent = '检索中…';
   try {
     const d = await postJSON('/api/knowledge/search?q=' + encodeURIComponent(q), {});
@@ -167,8 +205,9 @@ document.getElementById('btn-sim-search').addEventListener('click', async () => 
       link.addEventListener('click', async () => {
         try {
           await postJSON('/api/similar/confirm', {a_entry_id: ENTRY_ID, b_entry_id: i.entry_id, score: i.score});
-          location.reload();
-        } catch (e) { alert(e.message); }
+          ui.toast('已建立关联', { type: 'success' });
+          setTimeout(() => location.reload(), 500);
+        } catch (e) { /* 已提示 */ }
       });
       row.appendChild(link);
       box.appendChild(row);

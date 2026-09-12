@@ -32,17 +32,33 @@
 {% block head_extra %}{% endblock %}
 </head>
 <body data-iid="{{ iv.id if iv else '' }}">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="2.6" fill="none" stroke="currentColor" stroke-width="1.6"/></symbol>
+  <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M4 4l16 16M10.6 6.1A8.5 8.5 0 0112 6c6 0 9.5 6 9.5 6a17 17 0 01-3.3 3.9M6.4 8.1A17 17 0 002.5 12s3.5 6 9.5 6c1.2 0 2.3-.2 3.3-.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v10m0 0l4-4m-4 4L8 9M4 17h16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5l10 6.5-10 6.5z" fill="currentColor"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M6 7l1 12h10l1-12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M20 20l-4.2-4.2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 007 0l2-2a5 5 0 00-7-7l-1 1M14 11a5 5 0 00-7 0l-2 2a5 5 0 007 7l1-1" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+</svg>
+<a class="skip-link" href="#main">跳到主要内容</a>
 <header class="topbar">
   <div class="wrap">
     <a class="brand" href="/">AI_Review</a>
-    <nav>
+    <nav aria-label="主导航">
       <a href="/" class="{{ 'active' if request.endpoint == 'page_index' else '' }}">面试记录</a>
       <a href="/import" class="{{ 'active' if request.endpoint == 'page_import' else '' }}">导入面试</a>
-      <a href="/knowledge" class="{{ 'active' if request.endpoint in ('page_knowledge', 'page_knowledge_compare', 'page_export_bank') else '' }}">知识库</a>
+      <a href="/knowledge" class="{{ 'active' if request.endpoint in ('page_knowledge', 'page_knowledge_compare') else '' }}">知识库</a>
       <a href="/mock" class="{{ 'active' if request.endpoint in ('page_mock_setup', 'page_mock_run', 'page_mock_report') else '' }}">模拟面试</a>
       <a href="/settings" class="{{ 'active' if request.endpoint == 'page_settings' else '' }}">设置</a>
     </nav>
     <div class="topbar-right">
+      <button class="btn small" type="button" id="palette-open" aria-haspopup="dialog"
+              title="搜索面试记录与知识点（⌘K / Ctrl+K）">
+        <span aria-hidden="true">⌘K</span><span class="sr-only">打开全局搜索</span>
+      </button>
       <button class="btn small" id="theme-toggle" type="button"
               title="在浅色 / 深色之间快速切换（也可在设置页选择跟随系统）">切换主题</button>
       <span class="mode-badge {{ mode_badge.kind }}" title="当前解析模式（可在设置页切换）">{{ mode_badge.text }}</span>
@@ -52,14 +68,29 @@
 
 {% set _ok = request.args.get('ok') %}
 {% set _err = request.args.get('err') %}
-{% if _ok %}<div class="flash ok wrap">{{ _ok }}</div>{% endif %}
-{% if _err %}<div class="flash err wrap">{{ _err }}</div>{% endif %}
+{% if _ok %}<div class="flash ok wrap" role="status" aria-live="polite">{{ _ok }}</div>{% endif %}
+{% if _err %}<div class="flash err wrap" role="alert">{{ _err }}</div>{% endif %}
 
-<main class="wrap">
+<main class="wrap" id="main">
 {% block content %}{% endblock %}
 </main>
 <footer class="wrap foot">AI_Review · v{{ app_version }} · 本地运行 · 数据保存在项目 data/ 目录</footer>
+
+<nav class="tabbar" aria-label="移动端导航">
+  <a href="/" class="{{ 'active' if request.endpoint == 'page_index' else '' }}">记录</a>
+  <a href="/import" class="{{ 'active' if request.endpoint == 'page_import' else '' }}">导入</a>
+  <a href="/knowledge" class="{{ 'active' if request.endpoint in ('page_knowledge', 'page_knowledge_compare') else '' }}">知识库</a>
+  <a href="/mock" class="{{ 'active' if request.endpoint in ('page_mock_setup', 'page_mock_run', 'page_mock_report') else '' }}">模拟</a>
+  <a href="/settings" class="{{ 'active' if request.endpoint == 'page_settings' else '' }}">设置</a>
+</nav>
+
 <script src="/static/app.js"></script>
+<script>
+  (function () {
+    var btn = document.getElementById('palette-open');
+    if (btn) btn.addEventListener('click', function () { window.ui && window.ui.palette.open(); });
+  })();
+</script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

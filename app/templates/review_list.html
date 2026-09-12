@@ -37,10 +37,12 @@
     <div class="ops">
       <span class="chip s-review">共 {{ qas|length }} 题{% if pending %} · {{ pending }} 待确认{% endif %}</span>
       <button class="btn" data-post="/api/interviews/{{ iv.id }}/confirm-all"
-              data-confirm="把本场所有待确认题目标记为已确认？">全部确认</button>
+              data-confirm-title="全部确认" data-confirm="把本场所有待确认题目标记为已确认？">全部确认</button>
       <button class="btn" data-post="/api/interviews/{{ iv.id }}/merge-all"
-              data-confirm="将本场已确认题目纳入知识库（待确认题目会跳过）？">整场入库</button>
-      <a class="btn" href="/interviews/{{ iv.id }}/export">导出预览</a>
+              data-confirm-title="加入知识库" data-confirm="将本场已确认题目加入知识库？（待确认题目会跳过）">加入知识库</button>
+      <button class="btn" type="button"
+              data-export-preview="/api/export/interview/{{ iv.id }}"
+              data-export-title="{{ iv.title }}">导出预览</button>
       <a class="btn primary" href="/download/interviews/{{ iv.id }}.md">下载 .md</a>
     </div>
   </div>
@@ -51,9 +53,9 @@
     <div class="ops">
       <button class="btn small" id="btn-hide-all">全部隐藏答案</button>
       <button class="btn small" id="btn-show-all">全部显示答案</button>
-      <span class="muted small">复习模式：隐藏后逐题自测，点每题右侧按钮即可翻看答案（状态本机记忆）。</span>
+      <span class="muted small" id="save-state">隐藏状态本机记忆</span>
     </div>
-    <span class="muted small">校对：合并下一条 / 拆分 / 删除，用于修正误切分</span>
+    <span class="muted small">复习：隐藏后逐题自测；校对：每题「更多」里有合并 / 拆分 / 删除</span>
   </div>
 </section>
 
@@ -75,27 +77,51 @@
         {% endif %}
       </div>
       <div class="qa-actions">
-        <button class="btn small" data-toggle-answer="{{ q.id }}">隐藏答案</button>
+        <button class="btn small" data-toggle-answer="{{ q.id }}" aria-pressed="false">
+          <svg class="ico" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><use href="#i-eye"></use></svg>
+          <span class="toggle-label">隐藏答案</span>
+        </button>
         <a class="btn small primary" href="/interviews/{{ iv.id }}/qa/{{ q.id }}">复盘</a>
         {% if not q.entry_id %}
           {% if q.status in ('auto','pending') %}
           <button class="btn small" data-post="/api/qa/{{ q.id }}/confirm">确认</button>
           {% else %}
-          <button class="btn small" data-post="/api/qa/{{ q.id }}/merge">入库</button>
+          <button class="btn small" data-post="/api/qa/{{ q.id }}/merge">加入知识库</button>
           {% endif %}
         {% endif %}
-        <details class="more">
-          <summary class="btn small">更多校对</summary>
-          <div class="more-body">
-            <button class="btn small" data-post="/api/qa/{{ q.id }}/merge-next"
+        <button class="btn small" type="button" data-quick-edit="{{ q.id }}"
+                aria-expanded="false" aria-controls="quick-{{ q.id }}">快速编辑</button>
+        <span class="pop-wrap">
+          <button class="btn small" type="button" data-popover-trigger
+                  aria-haspopup="true" aria-expanded="false" title="更多校对操作">更多</button>
+          <div class="popover-menu" data-popover hidden role="menu">
+            <button class="btn small" role="menuitem" data-post="/api/qa/{{ q.id }}/merge-next"
+                    data-confirm-title="合并下一条"
                     data-confirm="将下一条问答合并到本条（用于修正被误拆的问答）？">合并下一条</button>
-            <button class="btn small" data-split="/api/qa/{{ q.id }}/split" data-answers="{{ q.answers|length }}">拆分</button>
-            <button class="btn small danger" data-post="/api/qa/{{ q.id }}/delete"
-                    data-confirm="删除这条问答（保留在数据库中可审计，列表中不再显示）？">删除</button>
+            <button class="btn small" role="menuitem" data-split="/api/qa/{{ q.id }}/split"
+                    data-answers="{{ q.answers|length }}">拆分</button>
+            <button class="btn small danger" role="menuitem" data-post="/api/qa/{{ q.id }}/delete"
+                    data-confirm-title="删除问答"
+                    data-confirm="删除这条问答？列表中将不再显示（可撤销）。">删除</button>
           </div>
-        </details>
+        </span>
       </div>
     </div>
+    <form class="quick-edit" id="quick-{{ q.id }}" hidden
+          data-quick-form="{{ q.id }}" data-qa-status="{{ q.status }}">
+      <div class="grid2">
+        <label>优化建议（本场工作区）
+          <textarea name="optimization" rows="2" placeholder="下次怎么说更好…">{{ q.optimization or '' }}</textarea>
+        </label>
+        <label>批注
+          <textarea name="annotation" rows="2" placeholder="当时的感受 / 待办…">{{ q.annotation or '' }}</textarea>
+        </label>
+      </div>
+      <div class="row">
+        <button class="btn small primary" type="submit">保存本题</button>
+        <span class="muted small" id="save-state-{{ q.id }}"></span>
+      </div>
+    </form>
     <div class="qa-answer" data-answer-of="{{ q.id }}">
       <div class="answer-body">
         {% if q.answers %}
@@ -143,7 +169,11 @@ function writeHiddenIds(set) {
 
 function setButtonLabel(row, hidden) {
   const btn = row.querySelector('[data-toggle-answer]');
-  if (btn) btn.textContent = hidden ? '显示答案' : '隐藏答案';
+  if (!btn) return;
+  btn.setAttribute('aria-pressed', hidden ? 'true' : 'false');
+  const label = btn.querySelector('.toggle-label');
+  if (label) label.textContent = hidden ? '显示答案' : '隐藏答案';
+  else btn.textContent = hidden ? '显示答案' : '隐藏答案';
 }
 
 document.querySelectorAll('[data-toggle-answer]').forEach(btn => {
@@ -157,6 +187,10 @@ document.querySelectorAll('[data-toggle-answer]').forEach(btn => {
     if (nowHidden) { hidden.add(id); } else { hidden.delete(id); }
     writeHiddenIds(hidden);
     setButtonLabel(row, nowHidden);
+    if (document.documentElement.classList.contains('hide-answers-all') && !nowHidden) {
+      box.classList.add('is-shown');
+    }
+    ui.markSaved('答案显示状态已保存');
   });
 });
 
@@ -167,6 +201,8 @@ document.getElementById('btn-hide-all').addEventListener('click', () => {
     setButtonLabel(row, true);
   });
   try { localStorage.setItem(HIDE_ALL_KEY, '1'); } catch (e) {}
+  ui.toast('已进入复习模式：答案全部隐藏，逐题点「显示答案」自测', { type: 'success' });
+  ui.markSaved('复习模式已保存');
 });
 document.getElementById('btn-show-all').addEventListener('click', () => {
   document.documentElement.classList.remove('hide-answers-all');
@@ -175,28 +211,64 @@ document.getElementById('btn-show-all').addEventListener('click', () => {
     setButtonLabel(row, false);
   });
   try { localStorage.setItem(HIDE_ALL_KEY, '0'); localStorage.removeItem(HIDDEN_IDS_KEY); } catch (e) {}
+  ui.markSaved('复习模式已保存');
 });
-/* 复习模式开启时，单题翻看：用 is-shown 覆盖全局隐藏 */
-document.querySelectorAll('[data-toggle-answer]').forEach(btn => {
+
+/* 快速编辑：列表内直接改优化建议 / 批注，不跳页、保存后给"已保存"反馈 */
+document.querySelectorAll('[data-quick-edit]').forEach(btn => {
   btn.addEventListener('click', () => {
-    const row = btn.closest('.qa-row');
-    const box = row.querySelector('.qa-answer');
-    if (document.documentElement.classList.contains('hide-answers-all')) {
-      box.classList.toggle('is-shown');
-    }
+    const form = document.getElementById('quick-' + btn.dataset.quickEdit);
+    if (!form) return;
+    const willShow = form.hasAttribute('hidden');
+    form.toggleAttribute('hidden', !willShow);
+    btn.setAttribute('aria-expanded', willShow ? 'true' : 'false');
+    if (willShow) form.querySelector('textarea').focus();
   });
 });
 
-/* 拆分：询问拆分点（第几条回答起独立成新条目） */
+document.querySelectorAll('[data-quick-form]').forEach(form => {
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const qid = form.dataset.quickForm;
+    const state = document.getElementById('save-state-' + qid);
+    const btn = form.querySelector('button[type=submit]');
+    ui.loading(btn, true, '保存中…');
+    try {
+      await window.postJSON('/api/qa/' + qid + '/update', {
+        optimization: form.querySelector('[name=optimization]').value,
+        annotation: form.querySelector('[name=annotation]').value,
+        status: form.dataset.qaStatus,
+      });
+      ui.markSaved();
+      if (state) state.textContent = '已保存（仅本题）';
+      ui.toast('已保存本题的优化建议与批注', { type: 'success' });
+    } catch (e) { /* 已提示 */ }
+    ui.loading(btn, false);
+  });
+});
+
+/* 拆分：弹层内输入拆分点（替代原生 prompt） */
 document.querySelectorAll('[data-split]').forEach(btn => {
   btn.addEventListener('click', async () => {
     const total = Number(btn.dataset.answers || 0);
-    if (total < 2) { alert('该题只有 ' + total + ' 条回答，无需拆分。'); return; }
-    const v = prompt(`该题共 ${total} 条回答。\n从第几条回答起拆分为新条目？（可填 1…${total - 1}）`, '1');
-    if (v === null) return;
-    const idx = parseInt(v, 10);
-    if (isNaN(idx)) { alert('请输入数字。'); return; }
-    await window.postJSON(btn.dataset.split, {answer_index: idx});
+    if (total < 2) {
+      ui.toast('该题只有 ' + total + ' 条回答，无需拆分', { type: 'error' });
+      return;
+    }
+    const value = await ui.confirm({
+      title: '拆分问答',
+      message: `该题共 ${total} 条回答。从第几条回答起拆分为新条目？`,
+      input: { label: '拆分点（1–' + (total - 1) + '）', type: 'number', value: '1', min: 1, max: total - 1 },
+      confirmText: '拆分',
+    });
+    if (value === null) return;
+    const idx = parseInt(value, 10);
+    if (!idx) { ui.toast('请输入 1–' + (total - 1) + ' 之间的数字', { type: 'error' }); return; }
+    try {
+      const res = await window.postJSON(btn.dataset.split, { answer_index: idx });
+      ui.toast(res.message || '已拆分', { type: 'success' });
+      setTimeout(() => location.reload(), 700);
+    } catch (e) { /* 已提示 */ }
   });
 });
 </script>

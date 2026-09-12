@@ -12,8 +12,7 @@
   <a href="/settings">设置</a> 启用 AI 模式并配置 API Key。</p>
 {% endif %}
 
-<div id="errbox" class="flash err" style="display:none"></div>
-<div id="warnbox" class="flash warn" style="display:none"></div>
+<div id="errbox" hidden></div>
 
 <section class="card">
   <h2>① 基本信息 <span class="muted small">（除转写文本外，其余字段都可留空）</span></h2>
@@ -47,19 +46,28 @@
   <textarea id="f-text" rows="12" placeholder="粘贴面试录音的转写文本（可含说话人标签）……"></textarea>
   <div class="row">
     <button class="btn" id="btn-sample">载入示例文本</button>
-    <button class="btn primary" id="btn-analyze">识别说话人与格式 →</button>
-    <span class="muted small" id="analyze-info"></span>
+    <button class="btn" id="btn-analyze">重新识别说话人与格式</button>
+    <span class="muted small" id="analyze-info">粘贴文本后会自动识别说话人（无需手动点击）</span>
   </div>
 
-  <div id="analyze-result" style="display:none">
-    <h3>说话人角色确认 <span class="muted small">（系统不猜测——请核对后进入下一步，R1）</span></h3>
+  <div id="analyze-skeleton" hidden>
+    <div class="ui-skeleton" style="margin-top:12px">
+      <span class="ui-skeleton-line" style="width:38%"></span>
+      <span class="ui-skeleton-line" style="width:72%"></span>
+      <span class="ui-skeleton-line" style="width:56%"></span>
+    </div>
+  </div>
+
+  <div id="analyze-result" hidden>
+    <h3>说话人角色确认 <span class="muted small">（系统不猜测——请核对后创建，R1）</span></h3>
     <p id="fmt-line" class="muted small"></p>
     <table class="tbl" id="speaker-table">
+      <caption class="sr-only">识别到的说话人与其角色</caption>
       <thead><tr><th>说话人</th><th>来源</th><th>置信度</th><th>角色</th><th>内容片段</th></tr></thead>
       <tbody></tbody>
     </table>
     <div class="row">
-      <button class="btn primary" id="btn-create">③ 创建并解析 →</button>
+      <button class="btn primary big" id="btn-create">创建并解析 →</button>
       <span class="muted small" id="create-info"></span>
     </div>
   </div>
@@ -69,9 +77,6 @@
 {% block scripts %}
 <script>
 const $ = (id) => document.getElementById(id);
-function showErr(msg){ const b=$('errbox'); b.textContent=msg; b.style.display='block'; window.scrollTo(0,0); }
-function hideErr(){ $('errbox').style.display='none'; }
-function showWarn(msg){ const b=$('warnbox'); if(!msg){b.style.display='none';return;} b.textContent=msg; b.style.display='block'; }
 
 // 默认面试时间 = 当前时间（可清空，留空则按当前时间保存）
 (function () {
@@ -117,26 +122,30 @@ $('f-duration').addEventListener('input', () => {
 $('btn-sample').addEventListener('click', async () => {
   const r = await fetch('/static/sample_transcript.txt');
   $('f-text').value = await r.text();
-  hideErr();
+  scheduleAnalyze(200);
 });
 
-let text = '', speakers = [];
+let text = '', speakers = [], analyzeTimer = null;
 
-$('btn-analyze').addEventListener('click', async () => {
+/* 识别说话人与格式：粘贴/输入后自动触发（防抖），也可点按钮手动重跑 */
+async function analyzeText() {
   text = $('f-text').value.trim();
-  if (!text) return showErr('请先粘贴或载入转写文本。');
-  hideErr(); showWarn('');
-  const btn = $('btn-analyze'); btn.disabled = true; $('analyze-info').textContent = '识别中…';
+  if (!text) { ui.toast('请先粘贴或载入转写文本', { type: 'error' }); return; }
+  const btn = $('btn-analyze');
+  ui.loading(btn, true, '识别中…');
+  $('analyze-skeleton').hidden = false;
+  ui.progress.start('识别说话人与格式');
   try {
     const r = await fetch('/api/analyze', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({text})});
     const data = await r.json();
-    if (!r.ok) { showErr(data.error || '识别失败'); return; }
+    if (!r.ok) { ui.toast(data.error || '识别失败', { type: 'error' }); return; }
     speakers = data.speakers || [];
-    $('analyze-result').style.display = 'block';
+    $('analyze-result').hidden = false;
+    $('analyze-info').textContent = '';
     $('fmt-line').textContent = `文本格式：${data.format_label}（${data.chars} 字符，${data.turns} 个发言段）；当前解析器：${data.extractor_label}`;
     if (data.duplicate) {
-      showWarn(`注意：系统已存在相同原文的面试《${data.duplicate.title}》（${data.duplicate.created_at}）。若确需再次导入，请在下一步确认。`);
+      ui.toast(`已存在相同原文的面试《${data.duplicate.title}》，创建时会再次确认`, { type: 'error' });
     }
     const tbody = $('speaker-table').querySelector('tbody');
     tbody.innerHTML = '';
@@ -149,18 +158,32 @@ $('btn-analyze').addEventListener('click', async () => {
         <td><b>${sp.label}</b></td>
         <td><span class="chip">${sp.source === 'label' ? '标签直读' : '内容推断'}</span></td>
         <td>${Math.round((sp.confidence || 0) * 100)}%</td>
-        <td><select class="role-sel">${roleSel}</select></td>
+        <td><select class="role-sel" aria-label="角色">${roleSel}</select></td>
         <td class="muted small">${sp.sample || ''}</td>`;
       tbody.appendChild(tr);
     }
     if (data.format === 'none') {
-      $('fmt-line').textContent += ' ｜ ⚠ 无标签文本：角色为低置信推断，请逐段核对（配置 API Key 后可由 AI 推断）。';
+      $('fmt-line').textContent += ' ｜ 无标签文本：角色为低置信推断，请核对（配置 API Key 后可由 AI 推断）。';
     }
-  } catch (e) { showErr('网络错误：' + e.message); }
-  finally { btn.disabled = false; $('analyze-info').textContent = ''; }
-});
+  } catch (e) {
+    ui.toast('网络错误：' + e.message, { type: 'error' });
+  } finally {
+    ui.progress.stop();
+    ui.loading(btn, false);
+    $('analyze-skeleton').hidden = true;
+  }
+}
 
-async function createInterview(force) {
+function scheduleAnalyze(delay) {
+  clearTimeout(analyzeTimer);
+  $('analyze-info').textContent = '文本已更新，稍后自动识别…';
+  analyzeTimer = setTimeout(analyzeText, delay === undefined ? 700 : delay);
+}
+
+$('btn-analyze').addEventListener('click', analyzeText);
+$('f-text').addEventListener('input', () => scheduleAnalyze());
+
+async function createInterview(force, btn) {
   const payload = {
     company: $('f-company').value.trim(),
     position: $('f-position').value.trim(),
@@ -176,29 +199,41 @@ async function createInterview(force) {
   document.querySelectorAll('#speaker-table tbody tr').forEach((tr, i) => {
     if (speakers[i]) payload.role_map[speakers[i].label] = tr.querySelector('.role-sel').value;
   });
-  const btn = $('btn-create'); btn.disabled = true;
-  $('create-info').textContent = '解析中（长文本可能需要一点时间）…';
+  if (!text) { ui.toast('请先粘贴或载入转写文本', { type: 'error' }); return; }
+  ui.loading(btn, true, '解析中…');
+  ui.progress.start('解析并整理问答');
   try {
     const r = await fetch('/api/interviews', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify(payload)});
     const data = await r.json();
     if (r.status === 409 && data.duplicate) {
-      const ex = data.existing || {};
-      if (confirm(`${data.error}\n\n仍然要导入这份转写吗？`)) { return createInterview(true); }
-      $('create-info').textContent = '';
+      ui.progress.stop();
+      ui.loading(btn, false);
+      const ok = await ui.confirm({
+        title: '疑似重复导入',
+        message: (data.error || '已存在相同原文的面试') + '\n\n仍然要导入这份转写吗？',
+        confirmText: '仍然导入',
+        danger: true,
+      });
+      if (ok !== null) { return createInterview(true, btn); }
       return;
     }
-    if (!r.ok) { showErr(data.error || '创建失败'); return; }
+    if (!r.ok) { ui.toast(data.error || '创建失败', { type: 'error' }); return; }
     const extra = [];
     if (data.pending_count) extra.push(`${data.pending_count} 个待确认`);
-    if (data.blank_answer_count) extra.push(`${data.blank_answer_count} 个无回答`);
+    if (data.blank_answer_count) extra.push(`${data.blank_answer_count} 个未提取到回答`);
     if (data.warnings && data.warnings.length) extra.push(data.warnings.join('；'));
     location.href = '/interviews/' + data.interview_id + '?ok=' + encodeURIComponent(
       `已提取 ${data.qa_count} 个问答` + (extra.length ? `（${extra.join('，')}）` : ''));
-  } catch (e) { showErr('网络错误：' + e.message); }
-  finally { btn.disabled = false; $('create-info').textContent = ''; }
+  } catch (e) {
+    ui.toast('网络错误：' + e.message, { type: 'error' });
+  } finally {
+    ui.progress.stop();
+    ui.loading(btn, false);
+    $('create-info').textContent = '';
+  }
 }
 
-$('btn-create').addEventListener('click', () => createInterview(false));
+$('btn-create').addEventListener('click', function () { createInterview(false, this); });
 </script>
 {% endblock %}

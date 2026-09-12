@@ -195,10 +195,8 @@ $('btn-parse-resume').addEventListener('click', async () => {
   } catch (e) { info.textContent = '失败：' + e.message; }
 });
 
-$('btn-start').addEventListener('click', async () => {
+$('btn-start').addEventListener('click', async function () {
   const mode = document.querySelector('input[name=mode]:checked').value;
-  const info = $('start-info');
-  info.textContent = '生成题目中…';
   const payload = {
     mode,
     interview_id: $('f-interview').value,
@@ -209,6 +207,8 @@ $('btn-start').addEventListener('click', async () => {
     ai_ratio: Number($('f-ai-ratio').value),
     tts: $('f-tts').value,
   };
+  ui.loading(this, true, '生成题目中…');
+  ui.progress.start('生成面试题');
   try {
     if (mode === 'resume' && $('resume-parsed').style.display !== 'none') {
       await postJSON('/api/resumes/' + parsedResumeId, {
@@ -216,15 +216,27 @@ $('btn-start').addEventListener('click', async () => {
       });
     }
     const d = await postJSON('/api/mock/sessions', payload);
+    if (d.note) ui.toast(d.note);
     location.href = '/mock/' + d.session_id;
-  } catch (e) { info.textContent = ''; alert(e.message); }
+  } catch (e) {
+    ui.loading(this, false);
+  } finally {
+    ui.progress.stop();
+  }
 });
 
 document.querySelectorAll('[data-del]').forEach(btn => {
   btn.addEventListener('click', async () => {
-    if (!confirm('删除这条模拟记录？')) return;
-    try { await postJSON('/api/mock/sessions/' + btn.dataset.del + '/delete', {}); location.reload(); }
-    catch (e) { alert(e.message); }
+    const ok = await ui.confirm({
+      title: '删除模拟记录', message: '删除后该轮模拟的题目与作答记录都会移除。',
+      confirmText: '删除', danger: true,
+    });
+    if (ok === null) return;
+    try {
+      await postJSON('/api/mock/sessions/' + btn.dataset.del + '/delete', {});
+      ui.toast('已删除模拟记录', { type: 'success' });
+      setTimeout(() => location.reload(), 500);
+    } catch (e) { /* 已提示 */ }
   });
 });
 </script>

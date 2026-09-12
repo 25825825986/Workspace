@@ -1,11 +1,19 @@
 {% extends "base.html" %}
+{% block title %}面试记录 · AI_Review{% endblock %}
 {% block content %}
 <section class="page-head">
   <div>
     <h1>面试记录</h1>
     <p class="muted">每次导入的面试都会保存在这里：点开查看问答、逐题复习、导出复盘报告。</p>
   </div>
-  <a class="btn primary" href="/import">＋ 导入面试</a>
+  <div class="ops">
+    <button class="btn" type="button" id="palette-hint" title="全局搜索（⌘K）">
+      <svg class="ico" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><use href="#i-search"></use></svg>搜索 ⌘K
+    </button>
+    <a class="btn primary" href="/import">
+      <svg class="ico" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><use href="#i-plus"></use></svg>导入面试
+    </a>
+  </div>
 </section>
 
 <section class="stats-row">
@@ -15,62 +23,41 @@
   <div class="stat"><b>{{ stats.companies }}</b><span>覆盖公司</span></div>
 </section>
 
-<form class="toolbar card" method="get" action="/">
-  <input type="search" name="q" value="{{ search }}" placeholder="搜索标题 / 公司 / 岗位 / 地点">
-  <select name="sort" title="排序">
+<form class="toolbar card" method="get" action="/" role="search">
+  <label class="sr-only" for="q">搜索面试记录</label>
+  <input type="search" id="q" name="q" value="{{ search }}" placeholder="搜索标题 / 公司 / 岗位 / 地点">
+  <label class="sr-only" for="sort">排序方式</label>
+  <select id="sort" name="sort" title="排序">
     <option value="recent" {{ 'selected' if sort == 'recent' else '' }}>按最近更新</option>
     <option value="interview_at" {{ 'selected' if sort == 'interview_at' else '' }}>按面试时间</option>
     <option value="qa_count" {{ 'selected' if sort == 'qa_count' else '' }}>按题目数</option>
     <option value="pending" {{ 'selected' if sort == 'pending' else '' }}>待确认优先</option>
   </select>
-  <select name="only" title="快筛">
+  <label class="sr-only" for="only">筛选</label>
+  <select id="only" name="only" title="筛选">
     <option value="" {{ 'selected' if not only else '' }}>全部记录</option>
     <option value="pending" {{ 'selected' if only == 'pending' else '' }}>仅有待确认</option>
-    <option value="not_merged" {{ 'selected' if only == 'not_merged' else '' }}>仅未入库</option>
-    <option value="merged" {{ 'selected' if only == 'merged' else '' }}>仅已入库</option>
+    <option value="not_merged" {{ 'selected' if only == 'not_merged' else '' }}>仅未加入知识库</option>
+    <option value="merged" {{ 'selected' if only == 'merged' else '' }}>仅已加入知识库</option>
   </select>
   <button class="btn primary" type="submit">筛选</button>
   {% if search or only or sort != 'recent' %}<a class="btn" href="/">重置</a>{% endif %}
+  <span class="muted small" id="load-more-count">已显示 {{ interviews|length }} / 共 {{ total }}</span>
 </form>
 
 {% if interviews %}
-<section class="rec-list">
-  {% for iv in interviews %}
-  <article class="rec-card card">
-    <div class="between">
-      <div class="rec-main">
-        <h3 class="rec-title"><a href="/interviews/{{ iv.id }}">{{ iv.title }}</a></h3>
-        <p class="muted small rec-meta">
-          <span class="chip s-{{ iv.status }}">{{ status_label.get(iv.status, iv.status) }}</span>
-          <span class="chip">{{ interview_types.get(iv.interview_type, iv.interview_type) }}</span>
-          {% if iv.company %}<span>{{ iv.company }}</span>{% endif %}
-          {% if iv.position %}<span>· {{ iv.position }}</span>{% endif %}
-          {% if iv.location %}<span>· {{ iv.location }}</span>{% endif %}
-          {% if iv.interview_at %}<span>· {{ iv.interview_at | dt }}</span>
-          {% elif iv.date %}<span>· {{ iv.date }}</span>{% endif %}
-          {% if iv.duration_minutes %}<span>· 时长 {{ iv.duration_minutes | duration }}</span>{% endif %}
-          {% if iv.expected_salary %}<span>· 期望 {{ iv.expected_salary }}</span>{% endif %}
-        </p>
-      </div>
-      <div class="ops">
-        <a class="btn small" href="/interviews/{{ iv.id }}">查看</a>
-        <a class="btn small" href="/download/interviews/{{ iv.id }}.md">导出 .md</a>
-        {% if not iv.merged_count and iv.qa_count %}
-        <button class="btn small" data-post="/api/interviews/{{ iv.id }}/merge-all"
-                data-confirm="将本场已确认题目整场纳入知识库？（待确认题目会被跳过）">整场入库</button>
-        {% endif %}
-      </div>
-    </div>
-    <p class="rec-counts small">
-      <span>题目 <b>{{ iv.qa_count }}</b></span>
-      {% if iv.pending_count %}<span class="warn-text">待确认 <b>{{ iv.pending_count }}</b></span>{% endif %}
-      {% if iv.blank_answer_count %}<span class="warn-text">无回答 <b>{{ iv.blank_answer_count }}</b></span>{% endif %}
-      <span>已入库 <b>{{ iv.merged_count }}</b></span>
-      {% if iv.parser_version %}<span class="muted">解析器 {{ iv.parser_version }}</span>{% endif %}
-    </p>
-  </article>
-  {% endfor %}
+<section class="rec-list" id="rec-list">
+  {% include "_records.html" %}
 </section>
+{% if has_more %}
+<div class="row" style="justify-content:center">
+  <button class="btn" type="button" id="btn-load-more"
+          data-load-more="/partials/records" data-load-target="#rec-list"
+          data-count-selector=".rec-card" data-page="{{ interviews|length }}"
+          data-offset="{{ interviews|length }}" data-total="{{ total }}"
+          data-params="q={{ search }}&sort={{ sort }}&only={{ only }}">加载更多（还有 {{ total - interviews|length }} 场）</button>
+</div>
+{% endif %}
 {% else %}
 <section class="card empty-state">
   {% if search or only %}
@@ -82,4 +69,11 @@
   {% endif %}
 </section>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  var hint = document.getElementById('palette-hint');
+  if (hint) hint.addEventListener('click', function () { window.ui.palette.open(); });
+</script>
 {% endblock %}

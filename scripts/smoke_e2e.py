@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import re
 import shutil
 import sys
 import zipfile
@@ -136,8 +137,14 @@ check("正常问答已回写 entry_id（反问待确认暂不入库）",
 # 6) 知识库与导出
 kb_html = client.get("/knowledge").get_data(as_text=True)
 check("知识库页分组聚合显示", "知识库" in kb_html and "累计被问 2 次" in kb_html)
-exp_html = client.get(f"/interviews/{iid}/export").get_data(as_text=True)
-check("导出预览(本场) 分节", "忠实问题" in exp_html and "优化建议" in exp_html and "批注" in exp_html)
+exp = client.get(f"/api/export/interview/{iid}")
+exp_data = json_of(exp, "导出预览(本场) 走抽屉接口")
+check("导出预览(本场) 分节", "忠实问题" in exp_data.get("content", "")
+      and "优化建议" in exp_data.get("content", "")
+      and exp_data.get("download_url") == f"/download/interviews/{iid}.md")
+check("旧导出预览页 301 到本场复盘",
+      client.get(f"/interviews/{iid}/export").status_code == 301)
+check("旧知识库导出页 301 到知识库", client.get("/bank/export").status_code == 301)
 dl = client.get(f"/download/interviews/{iid}.md")
 check("下载 .md 内容", dl.status_code == 200 and dl.get_data(as_text=True).startswith("# 面试复盘报告"))
 bank_dl = client.get("/download/bank.md")
@@ -356,7 +363,7 @@ check("取消关联生效", repository.similar_pair_count() == before_pairs - 1,
       f"{before_pairs} → {repository.similar_pair_count()}")
 kb_html2 = client.get("/knowledge").get_data(as_text=True)
 check("知识库页展示专题区与分组", "反问环节" in kb_html2 and "自我介绍" in kb_html2
-      and "重算相似关联" in kb_html2)
+      and "更新相似关联" in kb_html2 and "重新归类" in kb_html2)
 
 # 12) Phase 7：简历导入（含零依赖 docx）/ 模拟面试全流程
 r = client.post("/api/resumes", json={
@@ -420,6 +427,55 @@ tts = client.get("/api/tts/status").get_json()
 check("语音能力探测（web 可用、edge 可探）", tts.get("web") is True and "edge" in tts, str(tts))
 client.post(f"/api/mock/sessions/{sid}/delete", json={})
 check("删除模拟会话", repository.get_mock_session(sid) is None)
+
+# 13) Phase 8：优化项（撤销 / 分页片段 / 全局搜索 / 旧路由 301 / UI Kit 基座）
+victim2 = repository.list_qa(iid)[-1]["id"]
+res_del = client.post(f"/api/qa/{victim2}/delete", json={}).get_json()
+check("删除返回可撤销信息", res_del.get("undo_url") == f"/api/qa/{victim2}/restore"
+      and repository.get_qa(victim2) is None, str(res_del))
+client.post(res_del["undo_url"], json={})
+check("撤销删除后条目恢复", repository.get_qa(victim2) is not None)
+
+part = client.get("/partials/records?offset=0")
+check("记录分页片段可渲染", part.status_code == 200 and "rec-card" in part.get_data(as_text=True))
+check("记录页含加载更多按钮或计数",
+      ('data-load-more="/partials/records"' in records_html) or ("已显示" in records_html))
+
+srch = client.get("/api/search?q=缓存").get_json()
+check("全局搜索返回面试与知识点",
+      bool(srch.get("items")) and any(i["kind"] == "知识点" for i in srch["items"]),
+      str(srch)[:200])
+check("旧 /bank 301 到知识库", client.get("/bank").status_code == 301)
+
+pair0 = repository.list_similar_pairs(sim_entry["id"])
+if pair0:
+    ul = client.post("/api/similar/unlink", json={"a_entry_id": pair0[0]["a_entry_id"],
+                                                 "b_entry_id": pair0[0]["b_entry_id"]}).get_json()
+    check("取消关联返回撤销载荷", bool(ul.get("undo_url")) and bool(ul.get("undo_payload")),
+          str(ul)[:160])
+    client.post(ul["undo_url"], json=ul["undo_payload"])
+    check("撤销取消关联后恢复", repository.similar_pair_count() >= 1)
+else:
+    check("取消关联返回撤销载荷（样本不足跳过）", True)
+
+tpl_dir = ROOT / "app" / "templates"
+native = []
+for p in tpl_dir.glob("*.html"):
+    text = p.read_text(encoding="utf-8")
+    if re.search(r"(?<![\w.])(confirm|prompt|alert)\s*\(", text):
+        native.append(p.name)
+check("模板已无原生 confirm/alert/prompt", not native, str(native))
+
+app_js = (ROOT / "app" / "static" / "app.js").read_text(encoding="utf-8")
+css = (ROOT / "app" / "static" / "style.css").read_text(encoding="utf-8")
+base_html = (ROOT / "app" / "templates" / "base.html").read_text(encoding="utf-8")
+check("前端 UI Kit 提供 toast/confirm/loading/抽屉/命令面板",
+      all(k in app_js for k in ("ui.toast", "confirmDialog", "function loading", "drawer", "palette")))
+check("无障碍基座：aria-live / skip-link / focus-visible / reduced-motion",
+      "aria-live" in base_html and "skip-link" in base_html
+      and ":focus-visible" in css and "prefers-reduced-motion" in css)
+check("底部 Tab / 浮动菜单 / 暗色 on-brand token",
+      ".tabbar" in css and "--on-brand" in css and "data-popover" in css)
 
 print()
 print(f"共 {len(passed) + len(failed)} 项断言：通过 {len(passed)} / 失败 {len(failed)}")

@@ -64,9 +64,10 @@
     {% endfor %}
   </section>
 
-  <section class="card right-pane">
+  <section class="card right-pane" data-autosave="/api/qa/{{ qa.id }}/update"
+           data-autosave-payload='{"optimization":"#edit-optimization","annotation":"#edit-annotation"}'>
     <h3>优化建议（独立栏）＋ 批注</h3>
-    <p class="muted small">优化建议与批注只影响"下次怎么更好"，永不改写上方原文。</p>
+    <p class="muted small">优化建议与批注只影响"下次怎么更好"，永不改写上方原文。修改会自动保存（停止输入约 1 秒后）。</p>
     <label>优化建议
       <textarea id="edit-optimization" rows="5" placeholder="如：先给结论再展开；补充具体数据/例子；注意开头避免卡壳…">{{ qa.optimization or '' }}</textarea>
     </label>
@@ -92,9 +93,11 @@
     <div class="row">
       <button class="btn primary" id="btn-save">保存</button>
       {% if not qa.entry_id %}
-      <button class="btn" id="btn-merge">保存并入库面经库</button>
+      <button class="btn" id="btn-merge">保存并加入知识库</button>
+      {% else %}
+      <a class="btn" href="/knowledge/compare/{{ qa.entry_id }}">查看知识库对比</a>
       {% endif %}
-      <span class="muted" id="save-info"></span>
+      <span class="muted small" id="save-state">未修改</span>
     </div>
   </section>
 </div>
@@ -109,42 +112,53 @@
 <script>
 const qid = '{{ qa.id }}';
 const iid = '{{ iv.id }}';
-async function post(url, payload){
-  const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify(payload||{})});
-  const d = await r.json();
-  if(!r.ok) throw new Error(d.error || '保存失败');
-  return d;
-}
-async function saveAnd(merge){
-  const info = document.getElementById('save-info');
+
+async function saveAnd(merge, btn) {
   const payload = {
     annotation: document.getElementById('edit-annotation').value,
     optimization: document.getElementById('edit-optimization').value,
     status: document.getElementById('edit-status').value,
     category_id: document.getElementById('edit-category').value,
   };
-  info.textContent = '保存中…';
+  ui.loading(btn, true, '保存中…');
   try {
-    await post('/api/qa/' + qid + '/update', payload);
-    if(merge){ await post('/api/qa/' + qid + '/merge', {}); }
-    location.reload();
-  } catch(e){ info.textContent=''; alert(e.message); }
+    await postJSON('/api/qa/' + qid + '/update', payload);
+    if (merge) {
+      const res = await postJSON('/api/qa/' + qid + '/merge', {});
+      ui.toast(res.message || '已加入知识库', { type: 'success' });
+    } else {
+      ui.markSaved();
+      ui.toast('已保存本题', { type: 'success' });
+    }
+    setTimeout(() => location.reload(), 700);
+  } catch (e) {
+    ui.loading(btn, false);
+  }
 }
-document.getElementById('btn-save').addEventListener('click', () => saveAnd(false));
-const m = document.getElementById('btn-merge');
-if(m) m.addEventListener('click', () => saveAnd(true));
+document.getElementById('btn-save').addEventListener('click', function () { saveAnd(false, this); });
+const mergeBtn = document.getElementById('btn-merge');
+if (mergeBtn) mergeBtn.addEventListener('click', function () { saveAnd(true, this); });
 
-document.getElementById('fix-q-btn').addEventListener('click', async () => {
-  try { await post('/api/qa/' + qid + '/update', {fix_question_text: document.getElementById('fix-q').value}); location.reload(); }
-  catch(e){ alert(e.message); }
+document.getElementById('fix-q-btn').addEventListener('click', async function () {
+  ui.loading(this, true, '保存中…');
+  try {
+    await postJSON('/api/qa/' + qid + '/update', { fix_question_text: document.getElementById('fix-q').value });
+    ui.markSaved();
+    ui.toast('问题修正已保存', { type: 'success' });
+    setTimeout(() => location.reload(), 600);
+  } catch (e) { ui.loading(this, false); }
 });
 document.querySelectorAll('[data-fix-ans-btn]').forEach(btn => {
   btn.addEventListener('click', async () => {
     const idx = btn.dataset.idx;
     const text = document.querySelector(`[data-fix-ans][data-idx="${idx}"]`).value;
-    try { await post('/api/qa/' + qid + '/update', {fix_answer_idx: idx, fix_answer_text: text}); location.reload(); }
-    catch(e){ alert(e.message); }
+    ui.loading(btn, true, '保存中…');
+    try {
+      await postJSON('/api/qa/' + qid + '/update', { fix_answer_idx: idx, fix_answer_text: text });
+      ui.markSaved();
+      ui.toast('回答修正已保存（原始提取仍保留）', { type: 'success' });
+      setTimeout(() => location.reload(), 600);
+    } catch (e) { ui.loading(btn, false); }
   });
 });
 </script>

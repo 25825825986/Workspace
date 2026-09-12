@@ -31,6 +31,8 @@ INTERVIEW_TYPES = {"technical": "技术面", "behavior": "行为面", "hr": "HR�
                    "mixed": "综合面", "mock": "模拟面"}
 STATUS_LABEL = {"auto": "机器初提", "pending": "待确认", "confirmed": "已确认",
                 "corrected": "已修正"}
+PAGE_SIZE = 20            # 面试记录每页条数（Phase 8：渐进加载）
+KNOWLEDGE_PAGE = 60       # 知识库默认展示条目上限
 
 # 首次启动：准备目录 + 建表 + 幂等增量迁移（Phase 4）
 ensure_dirs()
@@ -86,7 +88,7 @@ def _speaker_map_of(iv: dict) -> dict:
 
 @app.route("/")
 def page_index():
-    """面试记录页（FR-02）：卡片式列表 + 搜索/快筛/排序 + 统计条。"""
+    """面试记录页（FR-02）：卡片式列表 + 搜索/快筛/排序 + 分页加载（Phase 8）。"""
     search = request.args.get("q") or ""
     sort = request.args.get("sort") or "recent"
     only = request.args.get("only") or ""
@@ -94,10 +96,28 @@ def page_index():
         sort = "recent"
     if only not in ("pending", "merged", "not_merged"):
         only = ""
-    return render_template("index.html",
-                           interviews=repository.list_interviews(search=search, sort=sort, only=only),
+    rows = repository.list_interviews(search=search, sort=sort, only=only,
+                                      limit=PAGE_SIZE, offset=0)
+    total = repository.count_interviews(search=search, only=only)
+    return render_template("index.html", interviews=rows,
                            stats=repository.dashboard_stats(),
-                           search=search, sort=sort, only=only)
+                           search=search, sort=sort, only=only,
+                           total=total, has_more=total > len(rows))
+
+
+@app.route("/partials/records")
+def partial_records():
+    """记录卡片片段（"加载更多"用：前端直接插入 HTML，避免重复渲染逻辑）。"""
+    search = request.args.get("q") or ""
+    sort = request.args.get("sort") or "recent"
+    only = request.args.get("only") or ""
+    try:
+        offset = max(0, int(request.args.get("offset") or 0))
+    except ValueError:
+        offset = 0
+    rows = repository.list_interviews(search=search, sort=sort, only=only,
+                                      limit=PAGE_SIZE, offset=offset)
+    return render_template("_records.html", interviews=rows)
 
 
 @app.route("/import")
@@ -136,29 +156,36 @@ def page_review_detail(iid: str, qid: str):
 
 @app.route("/bank")
 def page_bank():
-    """兼容旧链接：知识库已迁到 /knowledge。"""
-    return redirect("/knowledge")
+    """旧链接兼容：知识库已迁到 /knowledge（Phase 8：永久重定向）。"""
+    return redirect("/knowledge", code=301)
 
 
 @app.route("/knowledge")
 def page_knowledge():
-    """知识库（Phase 6）：三专题置顶 + 一级分类分组 + 频次 + 相似关联入口 + 检索。"""
+    """知识库（Phase 6/8）：三专题 + 一级分类 + 频次 + 相似关联 + 渐进加载。"""
     search = (request.args.get("q") or "").strip()
-    entries = repository.list_entries()
+    try:
+        limit = int(request.args.get("limit") or KNOWLEDGE_PAGE)
+    except ValueError:
+        limit = KNOWLEDGE_PAGE
+    limit = max(PAGE_SIZE, min(limit, 2000))
+    all_entries = repository.list_entries()
     # 懒补：历史条目缺分类时按规则即时归类（幂等，只补一次）
-    for e in entries:
+    for e in all_entries:
         if not e.get("group_name"):
             topic, group = knowledge.classify(e.get("head_question", ""),
                                               e.get("category_name", ""),
                                               e.get("category_type", ""))
             repository.set_entry_classification(e["id"], topic, group)
             e["topic"], e["group_name"] = topic, group
+    matched = all_entries
     if search:
         low = search.lower()
-        entries = [e for e in entries
+        matched = [e for e in all_entries
                    if low in (e.get("head_question") or "").lower()
                    or low in (e.get("category_name") or "").lower()
                    or any(low in (v or "").lower() for v in (e.get("question_variants") or []))]
+    entries = matched[:limit]
 
     pair_map: dict[str, list[dict]] = {}
     for p in repository.list_all_similar_pairs():
@@ -190,7 +217,9 @@ def page_knowledge():
     return render_template("knowledge.html", topics=topics, groups=groups,
                            stats=repository.entry_stats(), search=search,
                            similar_pairs=repository.similar_pair_count(),
-                           ai_available=config.extractor_mode() == "deepseek")
+                           ai_available=config.extractor_mode() == "deepseek",
+                           shown=len(entries), matched=len(matched), limit=limit,
+                           has_more=len(matched) > len(entries))
 
 
 @app.route("/knowledge/compare/<entry_id>")
@@ -208,21 +237,37 @@ def page_knowledge_compare(entry_id: str):
                            topics=knowledge.TOPIC_LABELS)
 
 
+# ---------- 导出（Phase 8：取消独立预览页，改为「下载 + 抽屉预览」） ----------
+
 @app.route("/interviews/<iid>/export")
 def page_export_interview(iid: str):
+    """旧链接兼容：导出预览页已收敛到记录页/复盘页的抽屉预览。"""
+    return redirect("/knowledge" if not repository.get_interview(iid) else f"/interviews/{iid}",
+                    code=301)
+
+
+@app.route("/api/export/interview/<iid>")
+def api_export_interview_text(iid: str):
     iv = repository.get_interview(iid)
     if not iv:
-        abort(404)
+        return jsonify({"error": "面试记录不存在"}), 404
     md = exporter.interview_to_md(iid)
     exporter.save_export(f"面试复盘-{iv['title']}-{iid}.md", md)
-    return render_template("export.html", md=md, kind="interview", iid=iid, iv=iv)
+    return jsonify({"content": md, "download_url": f"/download/interviews/{iid}.md",
+                    "saved_to": "data/export/"})
 
 
 @app.route("/bank/export")
-def page_export_bank():
+def page_export_bank_legacy():
+    """旧链接兼容：知识库导出预览已收敛到知识库页抽屉。"""
+    return redirect("/knowledge", code=301)
+
+
+@app.route("/api/export/bank")
+def api_export_bank_text():
     md = exporter.bank_to_md()
     exporter.save_export("面经库快照.md", md)
-    return render_template("export.html", md=md, kind="bank")
+    return jsonify({"content": md, "download_url": "/download/bank.md", "saved_to": "data/export/"})
 
 
 # ---------- 导出下载 ----------
@@ -378,18 +423,20 @@ def api_confirm_qa(qid: str):
     if not qa:
         return jsonify({"error": "问答条目不存在"}), 400
     repository.update_qa(qid, {"status": "confirmed"})
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "message": "已确认该题"})
 
 
 @app.route("/api/interviews/<iid>/confirm-all", methods=["POST"])
 def api_confirm_all(iid: str):
+    count = 0
     for q in repository.list_qa(iid):
         if q["status"] in ("auto", "pending"):
             repository.update_qa(q["id"], {"status": "confirmed"})
-    return jsonify({"ok": True})
+            count += 1
+    return jsonify({"ok": True, "message": f"已确认 {count} 道题"})
 
 
-# ---------- 校对操作（Phase 4：删除 / 合并下一条 / 拆分） ----------
+# ---------- 校对操作（Phase 4/8：删除可撤销 / 合并下一条 / 拆分） ----------
 
 @app.route("/api/qa/<qid>/delete", methods=["POST"])
 def api_delete_qa(qid: str):
@@ -398,13 +445,25 @@ def api_delete_qa(qid: str):
         return jsonify({"error": "问答条目不存在"}), 400
     repository.soft_delete_qa(qid)
     repository.renumber_seqs(qa["interview_id"])
-    return jsonify({"ok": True, "deleted": qid})
+    return jsonify({"ok": True, "deleted": qid, "message": "已从列表中移除",
+                    "undo_url": f"/api/qa/{qid}/restore"})
+
+
+@app.route("/api/qa/<qid>/restore", methods=["POST"])
+def api_restore_qa(qid: str):
+    """撤销软删除（Phase 8）。"""
+    repository.restore_qa(qid)
+    qa = repository.get_qa(qid)
+    if qa:
+        repository.renumber_seqs(qa["interview_id"])
+    return jsonify({"ok": True, "message": "已恢复该题"})
 
 
 @app.route("/api/qa/<qid>/merge-next", methods=["POST"])
 def api_merge_next_qa(qid: str):
     try:
-        return jsonify({"ok": True, **repository.merge_with_next(qid)})
+        result = repository.merge_with_next(qid)
+        return jsonify({"ok": True, "message": "已与下一条合并（可在复盘页查看原文对比）", **result})
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
@@ -417,7 +476,7 @@ def api_split_qa(qid: str):
     except (TypeError, ValueError):
         return jsonify({"error": "拆分点必须是数字"}), 400
     try:
-        return jsonify({"ok": True, **repository.split_qa(qid, index)})
+        return jsonify({"ok": True, "message": "已拆分为两条", **repository.split_qa(qid, index)})
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
@@ -433,7 +492,8 @@ def api_merge_qa(qid: str):
     if not qa:
         return jsonify({"error": "问答条目不存在"}), 400
     try:
-        return jsonify({"ok": True, **_merge(qa["interview_id"], qid)})
+        result = _merge(qa["interview_id"], qid)
+        return jsonify({"ok": True, "message": f"已加入知识库（合并 {result.get('merged', 0)} 条）", **result})
     except Exception as e:
         return jsonify({"error": f"入库失败：{e}"}), 400
 
@@ -441,7 +501,11 @@ def api_merge_qa(qid: str):
 @app.route("/api/interviews/<iid>/merge-all", methods=["POST"])
 def api_merge_all(iid: str):
     try:
-        return jsonify({"ok": True, **_merge(iid)})
+        result = _merge(iid)
+        msg = f"已加入知识库 {result.get('merged', 0)} 条"
+        if result.get("skipped"):
+            msg += f"（{result['skipped']} 条待确认已跳过）"
+        return jsonify({"ok": True, "message": msg, **result})
     except Exception as e:
         return jsonify({"error": f"入库失败：{e}"}), 400
 
@@ -617,7 +681,23 @@ def api_similar_unlink():
     if not a or not b:
         return jsonify({"error": "缺少条目 id"}), 400
     repository.delete_similar_pair(a, b)
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "message": "已取消关联",
+                    "undo_url": "/api/similar/restore",
+                    "undo_payload": {"a_entry_id": a, "b_entry_id": b,
+                                     "score": float(data.get("score") or 0.8)}})
+
+
+@app.route("/api/similar/restore", methods=["POST"])
+def api_similar_restore():
+    """撤销"取消关联"（Phase 8）。"""
+    data = request.get_json(silent=True) or {}
+    a = (data.get("a_entry_id") or "").strip()
+    b = (data.get("b_entry_id") or "").strip()
+    if not a or not b:
+        return jsonify({"error": "缺少条目 id"}), 400
+    repository.upsert_similar_pair(a, b, max(float(data.get("score") or 0.8), 0.8),
+                                   "manual", "人工确认同一问题（撤销恢复）")
+    return jsonify({"ok": True, "message": "已恢复关联"})
 
 
 @app.route("/api/knowledge/search", methods=["GET", "POST"])
@@ -855,3 +935,34 @@ def _edge_tts_available() -> bool:
 @app.route("/api/tts/status")
 def api_tts_status():
     return jsonify(_tts_providers())
+
+
+# ---------- 全局搜索（⌘K，Phase 8） ----------
+
+@app.route("/api/search")
+def api_global_search():
+    """搜索面试记录与知识点（供 ⌘K 命令面板使用）。"""
+    q = (request.args.get("q") or "").strip()
+    if not q:
+        return jsonify({"items": []})
+    low = q.lower()
+    items: list[dict] = []
+    for iv in repository.list_interviews(search=q):
+        items.append({"kind": "面试", "title": iv["title"],
+                      "sub": f"{iv.get('company') or ''} {iv.get('interview_at') or iv.get('date') or ''}".strip(),
+                      "url": f"/interviews/{iv['id']}"})
+        if len(items) >= 6:
+            break
+    for e in repository.list_entries():
+        if low in (e.get("head_question") or "").lower():
+            items.append({"kind": "知识点", "title": e["head_question"],
+                          "sub": f"{e.get('group_name') or '其他'} · 被问 {e['ask_times']} 次",
+                          "url": f"/knowledge/compare/{e['id']}"})
+            if len(items) >= 12:
+                break
+    if items:
+        items.append({"kind": "页面", "title": f"在知识库中搜索「{q}」",
+                      "sub": "查看全部匹配", "url": f"/knowledge?q={q}"})
+        items.append({"kind": "页面", "title": f"在面试记录中搜索「{q}」",
+                      "sub": "查看全部匹配", "url": f"/?q={q}"})
+    return jsonify({"items": items[:14]})
