@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>style probe</title></head>
+<body>
+<pre id="out">running…</pre>
+<script>
+/* 视觉规范探针（由 scripts/style_probe.py 驱动，不要直接用浏览器打开）。
+
+在目标页面里读取**真实 computed style**，回答三类验收问题：
+  1. 对比度：有没有低于 WCAG AA 4.5:1 的文字
+  2. 原文排版：宋体原文的字号 / 行高 / 行长（按全角字数）
+  3. 横向溢出：在指定宽度下页面有没有被撑宽
+
+用法：style-probe.html?page=/knowledge&w=390
+*/
+const qs = new URLSearchParams(location.search);
+const target = qs.get('page') || '/';
+const W = Number(qs.get('w') || 1440);
+
+function lum(c) {
+  const s = c.map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); });
+  return 0.2126 * s[0] + 0.7152 * s[1] + 0.0722 * s[2];
+}
+function parse(s) {
+  const m = s && s.match(/rgba?\(([^)]+)\)/);
+  if (!m) return null;
+  const p = m[1].split(',').map(x => parseFloat(x.trim()));
+  if (p.length > 3 && p[3] === 0) return null;
+  return [p[0], p[1], p[2]];
+}
+function ratio(a, b) {
+  const l1 = lum(a), l2 = lum(b);
+  return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+}
+function effBg(el, win) {
+  let n = el;
+  while (n && n.nodeType === 1) {
+    const bg = parse(win.getComputedStyle(n).backgroundColor);
+    if (bg) return bg;
+    n = n.parentElement;
+  }
+  return [255, 255, 255];
+}
+
+const frame = document.createElement('iframe');
+frame.style.cssText = 'width:' + W + 'px;height:900px;border:0;position:absolute;left:-9999px;top:0';
+frame.src = target;
+document.body.appendChild(frame);
+
+frame.addEventListener('load', () => {
+  setTimeout(() => {
+    const doc = frame.contentDocument, win = frame.contentWindow;
+    const de = doc.documentElement;
+    const vw = de.clientWidth;
+
+    /* ---- 1. 对比度 + 字号分布 + 原文排版 ---- */
+    const rows = [], readings = [], overflow = [];
+    doc.querySelectorAll('body *').forEach(el => {
+      const r = el.getBoundingClientRect();
+      if (r.width > vw + 1) {
+        const cs0 = win.getComputedStyle(el);
+        if (cs0.position !== 'fixed') {
+          overflow.push({
+            tag: el.tagName.toLowerCase(),
+            cls: (el.className || '').toString().slice(0, 40),
+            width: Math.round(r.width), by: Math.round(r.left + r.width - vw),
+            minWidth: cs0.minWidth,
+          });
+        }
+      }
+      const own = Array.from(el.childNodes)
+        .filter(n => n.nodeType === 3).map(n => n.textContent.trim()).join(' ').trim();
+      if (!own || own.length < 2) return;
+      const cs = win.getComputedStyle(el);
+      if (cs.display === 'none' || cs.visibility === 'hidden') return;
+      let anc = el, hidden = false;
+      while (anc && anc.nodeType === 1) {
+        if (parseFloat(win.getComputedStyle(anc).opacity) < 0.9) { hidden = true; break; }
+        anc = anc.parentElement;
+      }
+      if (hidden) return;
+      if (r.width < 1 || r.height < 1) return;
+      const fg = parse(cs.color);
+      if (!fg) return;
+      const size = parseFloat(cs.fontSize);
+      const bg = effBg(el, win);
+      const cr = Math.round(ratio(fg, bg) * 100) / 100;
+      rows.push({ tag: el.tagName.toLowerCase(), cls: (el.className || '').toString().slice(0, 36),
+                  size: size, cr: cr, text: own.replace(/\s+/g, ' ').slice(0, 30) });
+      /* 宋体原文块：量它的字号、行高、行长（按全角字数） */
+      const isSerif = /serif/i.test(cs.fontFamily) && !/sans-serif/i.test(cs.fontFamily);
+      const lh = parseFloat(cs.lineHeight) || size;
+      if (isSerif && own.length >= 8 && r.width > 120) {
+        readings.push({
+          cls: (el.className || '').toString().slice(0, 36),
+          font_px: Math.round(size * 10) / 10,
+          line_height: Math.round(lh / size * 100) / 100,
+          width_px: Math.round(r.width),
+          chars_per_line: Math.round(r.width / size * 10) / 10,
+          text: own.replace(/\s+/g, ' ').slice(0, 24),
+        });
+      }
+    });
+
+    const belowAA = rows.filter(r => r.size <= 15.5 && r.cr < 4.5);
+    const bySize = {}; rows.forEach(r => { bySize[r.size] = (bySize[r.size] || 0) + 1; });
+    overflow.sort((a, b) => b.by - a.by);
+
+    document.getElementById('out').textContent = JSON.stringify({
+      page: target, width: W, viewport_w: vw, scroll_w: de.scrollWidth,
+      overflow_px: de.scrollWidth - vw,
+      overflow_offenders: overflow.slice(0, 8),
+      text_elements: rows.length,
+      size_histogram: bySize,
+      below_aa_count: belowAA.length,
+      below_aa: belowAA.slice(0, 10).map(r => ({ cr: r.cr, size: r.size, cls: r.cls, text: r.text })),
+      reading_blocks: readings.slice(0, 12),
+    }, null, 1);
+  }, 2600);
+});
+</script>
+</body>
+</html>

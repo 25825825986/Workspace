@@ -4,109 +4,142 @@
 <section class="page-head">
   <div>
     <h1>设置</h1>
-    <p class="muted">主题外观、AI 模式与模型接入。所有设置保存在本机 <code>{{ data_dir }}</code>，改完立即生效（无需重启）。</p>
+    <p class="muted">主题外观、AI 模式与模型接入，改完立即生效。</p>
   </div>
-  <span class="mode-badge {{ mode_badge.kind }}">{{ mode_badge.text }}</span>
 </section>
 
 <div id="msg" class="flash ok" style="display:none"></div>
 <div id="err" class="flash err" style="display:none"></div>
 
-<section class="card">
-  <h2>① 主题外观</h2>
-  <p class="muted small">选择后立即生效并持久保存；「跟随系统」会随操作系统的深浅色设置自动切换。</p>
-  <fieldset id="theme-group">
-    <legend class="sr-only">主题外观</legend>
-    <div class="choice-row">
-      {% for t, label in [('light', '浅色'), ('dark', '深色'), ('system', '跟随系统')] %}
-      <label class="choice">
-        <input type="radio" name="theme" value="{{ t }}" {{ 'checked' if settings.theme == t else '' }}>
-        <span>{{ label }}</span>
-      </label>
-      {% endfor %}
+{# 左标签 / 右控件：三组设置合成一张纸，而不是三张一模一样的白卡片 #}
+<section class="card settings">
+  <div class="setting">
+    <div class="setting-key">
+      <h2>主题外观</h2>
+      <p class="setting-note">跟随系统会随操作系统的深浅色自动切换。</p>
     </div>
-  </fieldset>
-</section>
-
-<section class="card">
-  <h2>② AI 模式</h2>
-  <p class="muted small">
-    当前解析方式：<b>{{ extractor_label }}</b>。
-    「非 AI 模式」完全离线，只用规则切分与本地判定；需要 AI 抽取/推断时请选择「自动」或「强制 AI」并配置 API Key。
-  </p>
-  <fieldset id="ai-mode-group">
-    <legend class="sr-only">AI 模式</legend>
-    <div class="choice-row">
-      {% for m, label, desc in [('auto', '自动', '有 API Key 时用 AI，无 Key 时自动回退规则'),
-                                ('on', '强制 AI', '始终调用大模型（未配置 Key 会明确报错）'),
-                                ('off', '非 AI 模式', '纯本地规则，不联网')] %}
-      <label class="choice">
-        <input type="radio" name="ai_mode" value="{{ m }}" {{ 'checked' if settings.ai_mode == m else '' }}>
-        <span>{{ label }}<i class="muted small">{{ desc }}</i></span>
-      </label>
-      {% endfor %}
+    <div class="setting-val">
+      <fieldset id="theme-group">
+        <legend class="sr-only">主题外观</legend>
+        <div class="choice-row">
+          {% for t, label in [('light', '浅色'), ('dark', '深色'), ('system', '跟随系统')] %}
+          <label class="choice">
+            <input type="radio" name="theme" value="{{ t }}" {{ 'checked' if settings.theme == t else '' }}>
+            <span>{{ label }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </fieldset>
     </div>
-  </fieldset>
-  {% if not has_api_key and settings.ai_mode != 'off' %}
-  <p class="hint warn-text">当前尚未配置 API Key，AI 模式会回退为规则切分。</p>
-  {% endif %}
+  </div>
+
+  <div class="setting">
+    <div class="setting-key">
+      <h2>AI 模式</h2>
+      <p class="setting-note">当前解析方式：<b>{{ extractor_label }}</b></p>
+    </div>
+    <div class="setting-val">
+      <fieldset id="ai-mode-group">
+        <legend class="sr-only">AI 模式</legend>
+        <div class="choice-row">
+          {% for m, label, desc in [('auto', '自动', '有 API Key 时用 AI，无 Key 时回退规则'),
+                                    ('on', '强制 AI', '始终调用大模型，未配 Key 会明确报错'),
+                                    ('off', '非 AI 模式', '纯本地规则，不联网')] %}
+          <label class="choice">
+            <input type="radio" name="ai_mode" value="{{ m }}" {{ 'checked' if settings.ai_mode == m else '' }}>
+            <span>{{ label }}<i class="meta">{{ desc }}</i></span>
+          </label>
+          {% endfor %}
+        </div>
+      </fieldset>
+      {% if not has_api_key and settings.ai_mode != 'off' %}
+      <p class="hint warn-text">尚未配置 API Key，AI 模式会回退为规则切分。</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="setting">
+    <div class="setting-key">
+      <h2>模型 API</h2>
+      <p class="setting-note">OpenAI 兼容协议。</p>
+    </div>
+    <div class="setting-val">
+      {% if base_url_note %}
+      <p class="hint warn-text">已自动修正地址：{{ base_url_note }}　当前实际使用
+        <code>{{ base_url_effective }}</code>（点「保存设置」写入配置）</p>
+      {% endif %}
+      <label>Base URL
+        <input id="f-base-url" value="{{ settings.llm.base_url }}" placeholder="{{ base_url_effective }}">
+      </label>
+      <label>模型名
+        <span class="row-inline">
+          <input id="f-model" list="model-options" value="{{ settings.llm.model }}" placeholder="{{ model_effective }}">
+          <button class="btn small" type="button" id="btn-models">拉取可用模型</button>
+        </span>
+        <datalist id="model-options"></datalist>
+      </label>
+      <label>API Key
+        <span class="row-inline">
+          <input id="f-api-key" type="password" autocomplete="off"
+                 placeholder="{% if masked_key %}已保存：{{ masked_key }}（留空则不修改）{% else %}未配置，如 sk-xxxx{% endif %}">
+          <button class="btn small" type="button" id="btn-clear-key">清除 Key</button>
+        </span>
+      </label>
+      <details class="help">
+        <summary>填写要点与常见错误</summary>
+        <div class="help-body">
+          <p><b>Base URL 只填到版本段</b>，不要带模型路径：<br>
+            ✅ <code>https://api.siliconflow.cn/v1</code>　❌ <code>https://api.siliconflow.cn/v1/deepseek-ai/DeepSeek-V4-Flash</code></p>
+          <p>模型 ID 单独填在「模型名」，部分平台要求带厂商前缀（如 <code>deepseek-ai/DeepSeek-V3</code>）。
+            不确定就点「拉取可用模型」直接选；填错会 404，本应用会自动截断并提示。</p>
+          <p>Key 仅保存在本机 <code>data/secrets.json</code>，界面只显示掩码，不会写入代码或提交到 git。</p>
+        </div>
+      </details>
+      <div class="row">
+        <button class="btn primary" id="btn-save">保存设置</button>
+        <button class="btn" id="btn-test">测试连接</button>
+        <button class="btn" id="btn-reset">恢复默认</button>
+        <span class="meta" id="test-result"></span>
+      </div>
+    </div>
+  </div>
 </section>
 
-<section class="card">
-  <h2>③ 模型 API</h2>
-  <p class="muted small">OpenAI 兼容协议。<b>Base URL 只填到版本段</b>（如 <code>https://api.siliconflow.cn/v1</code>），
-    模型 ID 单独填在「模型名」（部分平台要求带厂商前缀，如 <code>deepseek-ai/DeepSeek-V3</code>）。</p>
-  {% if base_url_note %}
-  <p class="hint warn-text">已自动修正地址：{{ base_url_note }}<br>
-    当前实际使用：<code>{{ base_url_effective }}</code>（建议点「保存设置」把修正结果写入配置）</p>
-  {% endif %}
-  <div class="grid2">
-    <label>Base URL <input id="f-base-url" value="{{ settings.llm.base_url }}" placeholder="{{ base_url_effective }}"></label>
-    <label>模型名
-      <span class="row-inline">
-        <input id="f-model" list="model-options" value="{{ settings.llm.model }}" placeholder="{{ model_effective }}">
-        <button class="btn small" type="button" id="btn-models">拉取可用模型</button>
-      </span>
-      <datalist id="model-options"></datalist>
-    </label>
+<section class="card settings">
+  <div class="setting">
+    <div class="setting-key">
+      <h2>数据信息</h2>
+      <p class="setting-note">备份 = 复制 <code>data/</code> 整个目录。</p>
+    </div>
+    <div class="setting-val">
+      <div class="stats-row">
+        <div class="stat"><b>{{ data_stats.interviews }}</b><span>面试场次</span></div>
+        <div class="stat"><b>{{ data_stats.qa_total }}</b><span>题目总数</span></div>
+        <div class="stat"><b>{{ entry_stats.entries }}</b><span>知识库条目</span></div>
+        <div class="stat"><b>{{ export_count }}</b><span>导出文件</span></div>
+      </div>
+      <dl class="kv-list">
+        <dt>数据目录</dt><dd><code>{{ data_dir }}</code></dd>
+        <dt>数据库大小</dt><dd>约 {{ db_size_kb }} KB</dd>
+      </dl>
+    </div>
   </div>
-  <label>API Key
-    <span class="row-inline">
-      <input id="f-api-key" type="password" autocomplete="off"
-             placeholder="{% if masked_key %}已保存：{{ masked_key }}（留空则不修改）{% else %}未配置，如 sk-xxxx{% endif %}">
-      <button class="btn small" type="button" id="btn-clear-key">清除 Key</button>
-    </span>
-    <span class="hint">Key 仅保存在本机 <code>data/secrets.json</code>，界面只显示掩码；不会写入代码或提交到 git。</span>
-  </label>
-  <div class="row">
-    <button class="btn primary" id="btn-save">保存设置</button>
-    <button class="btn" id="btn-test">测试连接</button>
-    <button class="btn" id="btn-reset">恢复默认</button>
-    <span class="muted small" id="test-result"></span>
-  </div>
-</section>
 
-<section class="card">
-  <h2>④ 数据信息</h2>
-  <div class="stats-row">
-    <div class="stat"><b>{{ data_stats.interviews }}</b><span>面试场次</span></div>
-    <div class="stat"><b>{{ data_stats.qa_total }}</b><span>题目总数</span></div>
-    <div class="stat"><b>{{ entry_stats.entries }}</b><span>知识库条目</span></div>
-    <div class="stat"><b>{{ export_count }}</b><span>导出文件</span></div>
+  <div class="setting">
+    <div class="setting-key">
+      <h2>关于</h2>
+      <p class="setting-note">单机运行，不联网也能用。</p>
+    </div>
+    <div class="setting-val">
+      <dl class="kv-list">
+        <dt>版本</dt><dd>v{{ app_version }}</dd>
+        <dt>解析方式</dt><dd>{{ extractor_label }}</dd>
+        <dt>AI 模式</dt><dd>{{ ai_mode }}</dd>
+        <dt>API Key</dt><dd>{{ '已配置' if has_api_key else '未配置' }}</dd>
+        <dt>设计文档</dt><dd><code>docs/14-frontend-design-plan.md</code>（视觉方案）· <code>docs/12-phase8-delivery.md</code>（交互层交付）</dd>
+      </dl>
+    </div>
   </div>
-  <p class="muted small">
-    数据目录：<code>{{ data_dir }}</code> ｜ 数据库大小：约 {{ db_size_kb }} KB<br>
-    备份方式：直接复制 <code>data/</code> 整个目录（含数据库、原文存档、导出文件与设置）。
-  </p>
-</section>
-
-<section class="card">
-  <h2>⑤ 关于</h2>
-  <p class="muted small">
-    版本 v{{ app_version }} ｜ 解析方式：{{ extractor_label }} ｜ AI 模式：{{ ai_mode }} ｜
-    API Key：{{ '已配置' if has_api_key else '未配置' }}<br>
-    设计文档：<code>docs/04-requirements-spec.md</code>（需求）、<code>docs/06-phase4-delivery.md</code>（上一阶段交付）。
-  </p>
 </section>
 {% endblock %}
 

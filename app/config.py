@@ -138,13 +138,17 @@ def extractor_label() -> str:
 
 
 def mode_badge() -> dict:
-    """顶栏模式徽标（FR-05.3）。"""
+    """顶栏模式徽标（FR-05.3）。
+
+    徽标只说明「现在走哪条路」；具体模型名放进 title，不再用「·」把
+    模型 ID 拼进顶栏（那是一串只有开发者才读的字符）。
+    """
     mode = extractor_mode()
     if mode == "deepseek":
-        return {"kind": "ai", "text": f"AI 模式 · {llm_model()}"}
+        return {"kind": "ai", "text": "AI 模式", "title": f"解析模型：{llm_model()}"}
     if mode == "mock":
-        return {"kind": "mock", "text": "Mock 模式（本地规则模拟）"}
-    return {"kind": "off", "text": "非 AI 模式（本地规则）"}
+        return {"kind": "mock", "text": "Mock 模式", "title": "本地规则模拟"}
+    return {"kind": "off", "text": "非 AI 模式", "title": "纯本地规则，不联网"}
 
 
 def has_llm() -> bool:

@@ -9,6 +9,7 @@
 .mode-card:hover{background:var(--hover-bg)}
 .mode-card.active{border-color:var(--brand);background:var(--brand-soft)}
 .mode-card b{display:block;margin-bottom:4px}
+.mode-card > span{display:block;color:var(--muted);font-size:var(--fs-sm);line-height:1.55}
 .mode-card input{display:none}
 .kv{display:flex;gap:var(--sp-2);flex-wrap:wrap;align-items:center;margin-bottom:6px}
 .kv input[type=text]{flex:1 1 260px}
@@ -19,9 +20,8 @@
 <section class="page-head">
   <div>
     <h1>模拟面试</h1>
-    <p class="muted">用已有的面试记录或知识库题，配合简历与 AI 生成题，做一轮可复盘的口头演练。</p>
+    <p class="muted">用面试记录或知识库题做一轮口头演练，作答后可生成报告。</p>
   </div>
-  <span class="mode-badge {{ mode_badge.kind }}">{{ mode_badge.text }}</span>
 </section>
 
 <div id="msg" class="flash ok" style="display:none"></div>
@@ -33,17 +33,17 @@
     <label class="mode-card active" data-mode="bank">
       <input type="radio" name="mode" value="bank" checked>
       <b>题库随机</b>
-      <span class="muted small">从知识库按被问频次加权抽取，适合快速自查薄弱点（题库 {{ bank_stats.entries }} 条）</span>
+      <span>按被问频次加权抽题，适合快速自查薄弱点。题库 {{ bank_stats.entries }} 条</span>
     </label>
     <label class="mode-card" data-mode="whole">
       <input type="radio" name="mode" value="whole">
       <b>整场面试复盘</b>
-      <span class="muted small">选定某场面试记录，按原来的题目顺序重问一遍</span>
+      <span>选一场记录，按原来的题目顺序重问一遍</span>
     </label>
     <label class="mode-card" data-mode="resume">
       <input type="radio" name="mode" value="resume">
       <b>简历 + 题库 + AI</b>
-      <span class="muted small">导入简历后按技能/项目生成针对性问题，AI 与题库按比例混合</span>
+      <span>按简历的技能与项目生成针对性问题</span>
     </label>
   </div>
 
@@ -66,7 +66,7 @@
       </select>
     </label>
     <div class="grid2">
-      <label>上传简历文件（.txt / .md / .docx）
+      <label>上传简历文件
         <input type="file" id="f-resume-file" accept=".txt,.md,.markdown,.docx">
       </label>
       <label>或粘贴简历文本
@@ -75,14 +75,14 @@
     </div>
     <div class="row">
       <button class="btn" id="btn-parse-resume" type="button">解析简历</button>
-      <span class="muted small" id="resume-info"></span>
+      <span class="meta" id="resume-info"></span>
     </div>
     <div id="resume-parsed" style="display:none">
-      <label>技能关键词（可修改，逗号分隔）
-        <input id="f-skills" placeholder="如：java, redis, 微服务, 高并发">
+      <label>技能关键词
+        <input id="f-skills" placeholder="逗号分隔，如：java, redis, 微服务, 高并发">
       </label>
-      <label>项目关键词（可修改，逗号分隔）
-        <input id="f-projects" placeholder="如：订单系统, 支付平台">
+      <label>项目关键词
+        <input id="f-projects" placeholder="逗号分隔，如：订单系统, 支付平台">
       </label>
     </div>
   </div>
@@ -92,32 +92,31 @@
   <h2>② 参数</h2>
   <div class="grid3">
     <label>题目数量 <input id="f-count" type="number" min="1" max="30" value="8"></label>
-    <label>AI 生成比例（仅简历模式）
+    <label>AI 生成比例 <span class="meta">仅简历模式</span>
       <input id="f-ai-ratio" type="range" min="0" max="0.8" step="0.1" value="0.4">
       <span class="hint" id="ai-ratio-hint">40% AI 生成 + 60% 题库随机</span>
     </label>
     <label>语音播报
       <select id="f-tts">
-        <option value="web">浏览器语音（零依赖，默认）</option>
+        <option value="web">浏览器语音（默认）</option>
         <option value="none">静音（纯文本）</option>
         <option value="edge" {% if not tts_providers.edge %}disabled{% endif %}>
-          服务端 edge-tts（在线音色更自然）{% if not tts_providers.edge %} · 未安装{% endif %}</option>
+          服务端 edge-tts{% if not tts_providers.edge %} · 未安装{% endif %}</option>
         <option value="piper" {% if not tts_providers.piper %}disabled{% endif %}>
           开源本地 Piper{% if not tts_providers.piper %} · 未安装{% endif %}</option>
       </select>
-      <span class="hint">未安装的方案会自动回退为浏览器语音，不影响作答。</span>
     </label>
   </div>
   <div class="choice-row">
     <label class="choice"><input type="checkbox" id="f-shuffle"><span>打乱顺序</span></label>
-    <label class="choice"><input type="checkbox" id="f-followup"><span>附加追问（2 条深挖题）</span></label>
+    <label class="choice"><input type="checkbox" id="f-followup"><span>附加追问</span></label>
   </div>
   {% if not ai_available %}
-  <p class="hint">当前为非 AI 模式：简历模式将只使用题库随机题（可在「设置」切换 AI 模式并配置 API Key）。</p>
+  <p class="hint">当前为非 AI 模式：简历模式只出题库随机题。</p>
   {% endif %}
   <div class="row">
     <button class="btn primary big" id="btn-start">开始模拟面试</button>
-    <span class="muted small" id="start-info"></span>
+    <span class="meta" id="start-info"></span>
   </div>
 </section>
 
@@ -133,7 +132,7 @@
         <td><span class="chip">{{ {'whole': '整场', 'bank': '题库', 'resume': '简历+AI'}.get(s.mode, s.mode) }}</span></td>
         <td>{{ s.answered_count }} / {{ s.question_count }}
           {% if s.status == 'finished' %}<span class="chip s-confirmed">已结束</span>{% endif %}</td>
-        <td class="muted small">{{ (s.started_at or '')[:16] }}</td>
+        <td class="meta">{{ (s.started_at or '')[:16] }}</td>
         <td class="ops">
           <a class="btn small" href="/mock/{{ s.id }}">继续/查看</a>
           <a class="btn small" href="/mock/{{ s.id }}/report">报告</a>

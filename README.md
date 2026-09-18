@@ -48,14 +48,18 @@ python run.py
 
 | 脚本 | 作用 |
 |------|------|
-| `python scripts/smoke_e2e.py` | 后端全链路断言（116 项，使用独立 `.test-data/`，不动真实数据） |
+| `python scripts/smoke_e2e.py` | 后端全链路断言（117 项，使用独立 `.test-data/`，不动真实数据） |
 | `python scripts/llm_diag.py` | **模型 API 诊断**：配置解析 + 模型列表校验 + 最小对话测试 |
 | `python scripts/llm_e2e_check.py` | **真实模型端到端**：function calling + 完整 AI 抽取入库（需联网与 Key） |
 | `python scripts/ui_kit_check.py` | UI Kit 真实浏览器行为检查（Toast/弹层/抽屉/命令面板） |
-| `python scripts/screenshot_ui.py [--dark\|--mobile]` | 生成 30 张界面截图并做 DOM 校验 |
+| `python scripts/style_probe.py [--dark] [--width 390]` | **视觉规范验收**：真实 computed style 查对比度（≥4.5:1）、原文排版（字号/行高/行长）、横向溢出；不达标退出码 1 |
+| `python scripts/screenshot_ui.py [--dark\|--mobile]` | 生成界面截图并做 DOM 校验（窄屏走固定宽度 iframe，绕开 Windows 窗口最小宽度） |
 | `python scripts/ui_audit.py` | 像素审计（空白/溢出/截断/留白/对比度/主题） |
-| `python scripts/design_audit.py` | 设计量化证据（组件计数、token、无障碍覆盖） |
+| `python scripts/design_audit.py` | 设计量化证据 + **设计系统硬指标 14 项断言**（token / 圆角语义 / 颜色角色 / 模板化痕迹） |
 | `python scripts/dev_seed.py` | 灌入演示数据（会清空 `data/`） |
+
+> 视觉规范与设计系统见 `docs/14-frontend-design-plan.md`（「边注本」：原文纯白纸面 + 宋体长读，
+> 批注内凹边栏，颜色只做状态，题边用「正」字记被问频次）。
 
 ## 模型 API 配置要点（常见坑）
 

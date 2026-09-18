@@ -1,43 +1,50 @@
 {# 面试记录卡片（index.html 与 /partials/records 共用，Phase 8 分页加载） #}
 {% for iv in interviews %}
-<article class="rec-card card">
-  <div class="between">
-    <div class="rec-main">
-      <h3 class="rec-title"><a href="/interviews/{{ iv.id }}">{{ iv.title }}</a></h3>
-      <p class="muted small rec-meta">
-        <span class="chip s-{{ iv.status }}">{{ status_label.get(iv.status, iv.status) }}</span>
-        <span class="chip">{{ interview_types.get(iv.interview_type, iv.interview_type) }}</span>
-        {% if iv.company %}<span>{{ iv.company }}</span>{% endif %}
-        {% if iv.position %}<span>· {{ iv.position }}</span>{% endif %}
-        {% if iv.location %}<span>· {{ iv.location }}</span>{% endif %}
-        {% if iv.interview_at %}<span>· {{ iv.interview_at | dt }}</span>
-        {% elif iv.date %}<span>· {{ iv.date }}</span>{% endif %}
-        {% if iv.duration_minutes %}<span>· 时长 {{ iv.duration_minutes | duration }}</span>{% endif %}
-        {% if iv.expected_salary %}<span>· 期望 {{ iv.expected_salary }}</span>{% endif %}
-      </p>
-    </div>
-    <div class="ops">
-      <a class="btn small primary" href="/interviews/{{ iv.id }}">查看</a>
-      <button class="btn small" type="button"
-              data-export-preview="/api/export/interview/{{ iv.id }}"
-              data-export-title="{{ iv.title }}">
-        <svg class="ico" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><use href="#i-eye"></use></svg>预览
-      </button>
-      <a class="btn small" href="/download/interviews/{{ iv.id }}.md">
-        <svg class="ico" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><use href="#i-download"></use></svg>下载
-      </a>
-      {% if not iv.merged_count and iv.qa_count %}
-      <button class="btn small" data-post="/api/interviews/{{ iv.id }}/merge-all"
-              data-confirm-title="加入知识库"
-              data-confirm="将本场已确认题目加入知识库？（待确认题目会跳过）">加入知识库</button>
-      {% endif %}
-    </div>
+<article class="rec-card">
+  <div class="rec-main">
+    <h3 class="rec-title"><a href="/interviews/{{ iv.id }}">{{ iv.title }}</a></h3>
+    <p class="rec-meta">
+      <span class="chip s-{{ iv.status }}">{{ status_label.get(iv.status, iv.status) }}</span>
+      <span class="chip">{{ interview_types.get(iv.interview_type, iv.interview_type) }}</span>
+      <span class="rec-when">
+        {% if iv.interview_at %}{{ iv.interview_at | dt }}{% elif iv.date %}{{ iv.date }}{% endif %}
+        {% if iv.location %}<i>{{ iv.location }}</i>{% endif %}
+      </span>
+      <span class="rec-rest">
+        {% if iv.company %}{{ iv.company }}{% endif %}
+        {% if iv.position %}{% if iv.company %} · {% endif %}{{ iv.position }}{% endif %}
+        {% if iv.duration_minutes %}{% if iv.company or iv.position %} · {% endif %}{{ iv.duration_minutes | duration }}{% endif %}
+        {% if iv.expected_salary %}{% if iv.company or iv.position or iv.duration_minutes %} · {% endif %}期望 {{ iv.expected_salary }}{% endif %}
+      </span>
+    </p>
   </div>
-  <p class="rec-counts small">
-    <span>题目 <b>{{ iv.qa_count }}</b></span>
-    {% if iv.pending_count %}<span class="warn-text">待确认 <b>{{ iv.pending_count }}</b></span>{% endif %}
-    {% if iv.blank_answer_count %}<span class="warn-text">未提取到回答 <b>{{ iv.blank_answer_count }}</b></span>{% endif %}
-    <span>已加入知识库 <b>{{ iv.merged_count }}</b></span>
+
+  {# 题量是这个列表真正的主角：它才是你要复盘的对象 #}
+  <p class="rec-figures">
+    <span class="rec-qn"><b>{{ iv.qa_count }}</b> 题</span>
+    <span class="rec-sub">已入库 {{ iv.merged_count }}</span>
   </p>
+
+  <p class="rec-flags">
+    {% if iv.pending_count %}<a class="rec-flag" href="/interviews/{{ iv.id }}">待确认 {{ iv.pending_count }}</a>{% endif %}
+    {% if iv.blank_answer_count %}<a class="rec-flag" href="/interviews/{{ iv.id }}">未提取到回答 {{ iv.blank_answer_count }}</a>{% endif %}
+  </p>
+
+  <div class="ops">
+    <a class="btn small primary" href="/interviews/{{ iv.id }}">查看</a>
+    <button class="btn small" type="button"
+            data-export-preview="/api/export/interview/{{ iv.id }}"
+            data-export-title="{{ iv.title }}">
+      <svg class="ico" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><use href="#i-eye"></use></svg>预览
+    </button>
+    <a class="btn small" href="/download/interviews/{{ iv.id }}.md">
+      <svg class="ico" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><use href="#i-download"></use></svg>下载
+    </a>
+    {% if not iv.merged_count and iv.qa_count %}
+    <button class="btn small" data-post="/api/interviews/{{ iv.id }}/merge-all"
+            data-confirm-title="加入知识库"
+            data-confirm="将本场已确认题目加入知识库？（待确认题目会跳过）">加入知识库</button>
+    {% endif %}
+  </div>
 </article>
 {% endfor %}

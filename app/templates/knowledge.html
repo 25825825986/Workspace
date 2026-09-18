@@ -1,51 +1,64 @@
 {% extends "base.html" %}
 {% block title %}知识库 · AI_Review{% endblock %}
 
-{% macro entry_card(e) %}
-<div class="entry">
-  <div class="between">
-    <div class="entry-main">
-      <b class="entry-q">{{ e.head_question }}</b>
-      {% if e.question_variants %}<span class="muted small">＋{{ e.question_variants|length }} 种变体问法</span>{% endif %}
-      {% if e.best_qa_id %}<span class="chip">已标最佳</span>{% endif %}
-    </div>
-    <div class="ops">
-      <span class="muted small">被问 <b>{{ e.ask_times }}</b> 次 · 出处 {{ e.source_interview_count }} 场 ·
-        最近 {{ (e.last_asked_at or '')[:10] or '-' }}</span>
-      {% if e.similar_confirmed %}
-      <a class="chip chip-link" href="/knowledge/compare/{{ e.id }}">相似 {{ e.similar_confirmed }} 条 →</a>
-      {% elif e.similar_suspected %}
-      <a class="chip chip-link s-pending" href="/knowledge/compare/{{ e.id }}">疑似相似 {{ e.similar_suspected }} 条 →</a>
-      {% else %}
-      <a class="chip chip-link" href="/knowledge/compare/{{ e.id }}">查看对比 →</a>
-      {% endif %}
-    </div>
-  </div>
-  <div class="duo-mini">
-    <div class="b-col">
-      <p class="tagline">忠实核心答案（原文，只读）</p>
-      <p class="verbatim small">{{ e.core_extract or '（暂无——请在某场复盘中确认并入库）' }}</p>
-    </div>
-    <div class="b-col">
-      <p class="tagline">优化建议（独立栏）</p>
-      <p class="small">{{ e.optimization or '（未填写——可在单题复盘的「优化建议」补充）' }}</p>
-    </div>
-  </div>
+{% macro tally(n) %}
+{# 题边刻痕：满 5 次记一个「正」字（中文记数的通用写法），不足 5 次的余数用单道竖刻。
+   数字放在最上面，和题目首行同一基线——下面的记号就是这个数字的形状。 #}
+<div class="tally" role="img" aria-label="被问 {{ n }} 次">
+  <span class="tally-n">{{ n }}</span>
+  {% for _ in range(n // 5) %}<span class="tally-zheng">正</span>{% endfor %}
+  {% if n % 5 %}
+  <span class="tally-rest">{% for _ in range(n % 5) %}<i></i>{% endfor %}</span>
+  {% endif %}
 </div>
 {% endmacro %}
 
+{% macro entry_card(e) %}
+<article class="entry">
+  {{ tally(e.ask_times) }}
+  <div class="entry-body">
+    <div class="entry-head">
+      <b class="entry-q">{{ e.head_question }}</b>
+      {% if e.best_qa_id %}<span class="chip s-confirmed">最佳作答</span>{% endif %}
+      {% if e.question_variants %}<span class="meta">＋{{ e.question_variants|length }} 种变体问法</span>{% endif %}
+    </div>
+    <p class="meta entry-facts">
+      <span>出处 {{ e.source_interview_count }} 场</span>
+      <span class="nowrap">最近 {{ (e.last_asked_at or '')[:10] or '-' }}</span>
+      {% if e.similar_confirmed %}
+      <a href="/knowledge/compare/{{ e.id }}">相似 {{ e.similar_confirmed }} 条</a>
+      {% elif e.similar_suspected %}
+      <a class="flag-text" href="/knowledge/compare/{{ e.id }}">疑似相似 {{ e.similar_suspected }} 条</a>
+      {% else %}
+      <a href="/knowledge/compare/{{ e.id }}">查看对比</a>
+      {% endif %}
+    </p>
+    <div class="duo-mini">
+      <div class="b-col">
+        <p class="tagline">忠实核心答案</p>
+        {% if e.core_extract %}<p class="verbatim">{{ e.core_extract }}</p>
+        {% else %}<p class="meta">还没有沉淀作答，先在某场复盘中确认并入库。</p>{% endif %}
+      </div>
+      <div class="b-col">
+        <p class="tagline">优化建议</p>
+        {% if e.optimization %}<p class="small">{{ e.optimization }}</p>
+        {% else %}<p class="meta">未填写</p>{% endif %}
+      </div>
+    </div>
+  </div>
+</article>
+{% endmacro %}
+
 {% block head_extra %}
-<style>.topic-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:var(--sp-3)}
-.topic-card{border-top:3px solid var(--brand)}
-.chip-link:hover{text-decoration:none;background:var(--brand-soft);color:var(--brand);border-color:var(--brand-line)}
-.entry-q{font-size:15px}</style>
+<style>.topic-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:var(--sp-4)}
+.chip-link:hover{text-decoration:none;background:var(--brand-soft);color:var(--ink);border-color:var(--line-strong)}</style>
 {% endblock %}
 
 {% block content %}
 <section class="page-head">
   <div>
     <h1>知识库</h1>
-    <p class="muted">跨场累积：自我介绍 / 个人发展 / 反问环节单独总结，其余按一级分类归档；被问次数越多说明越常考。</p>
+    <p class="muted tally-legend">左侧记号＝这道题被问过几次：满 5 次记一个「正」字，不足的用竖刻补；被问得越多，记号越长。</p>
   </div>
   <div class="ops">
     <button class="btn" id="btn-recompute"
@@ -71,17 +84,21 @@
   <input type="search" id="kb-q" name="q" value="{{ search }}" placeholder="搜索问题 / 知识点 / 变体问法">
   <button class="btn primary" type="submit">搜索</button>
   {% if search %}<a class="btn" href="/knowledge">重置</a>{% endif %}
-  <span class="muted small">
-    已显示 {{ shown }} / {{ matched }} 条；相似判定：规则层 ≥0.72 自动关联，0.45–0.72 记为"疑似"{% if ai_available %}（AI 模式会再交模型判定）{% endif %}
-  </span>
+  <span class="meta">已显示 {{ shown }} / {{ matched }} 条</span>
+  <details class="help">
+    <summary>相似判定规则</summary>
+    <div class="help-body">
+      <p>规则层相似度 ≥0.72 自动关联，0.45–0.72 记为「疑似」待你确认{% if ai_available %}；AI 模式下疑似区间会再交模型判定{% endif %}。</p>
+    </div>
+  </details>
 </form>
 
 {% if topics %}
 <section class="topic-grid">
   {% for t in topics %}
-  <article class="card topic-card">
-    <h3>{{ t.label }} <span class="muted small">累计 {{ t.total_ask }} 次 · {{ t.entries|length }} 个知识点</span></h3>
-    <p class="muted small">{{ t.desc }}</p>
+  <article class="card">
+    <h3>{{ t.label }} <span class="meta">累计 {{ t.total_ask }} 次 · {{ t.entries|length }} 个知识点</span></h3>
+    <p class="card-sub">{{ t.desc }}</p>
     {% for e in t.entries %}{{ entry_card(e) }}{% endfor %}
   </article>
   {% endfor %}
@@ -91,7 +108,7 @@
 {% for g in groups %}
 <section class="card">
   <h3>{{ g.name }}
-    <span class="muted small">累计被问 {{ g.total_ask }} 次 · {{ g.entries|length }} 个知识点</span>
+    <span class="meta">累计被问 {{ g.total_ask }} 次 · {{ g.entries|length }} 个知识点</span>
   </h3>
   {% for e in g.entries %}{{ entry_card(e) }}{% endfor %}
 </section>

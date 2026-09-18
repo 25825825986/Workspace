@@ -3,12 +3,43 @@
 
 {% block head_extra %}
 <style>
-.cmp-table{width:100%;border-collapse:separate;border-spacing:0 10px}
-.cmp-table th{font-size:var(--fs-xs);color:var(--muted);text-align:left;padding:0 10px 4px}
-.cmp-table td{background:var(--surface-2);border-top:1px solid var(--line);border-bottom:1px solid var(--line);
-  padding:10px;vertical-align:top;font-size:13.5px}
-.cmp-table td:first-child{border-left:1px solid var(--line);border-radius:var(--r) 0 0 var(--r);width:180px}
-.cmp-table td:last-child{border-right:1px solid var(--line);border-radius:0 var(--r) var(--r) 0}
+/* 每一次作答是一行：原文列是纸面（宋体、纯白），加工列是内凹面（无衬线、更暗）。
+   同一行里两列的明度差就是产品红线「提取 ≠ 改写」的视觉表达。 */
+/* 作答叠层：一张纸＝答过一次。错位堆着，只露出日期与场合。
+   答得越多，这摞纸越厚——这是「跨场累积」在视觉上的形状。 */
+.attempts{display:flex;flex-wrap:wrap;align-items:flex-start;
+  padding:var(--sp-2) 0 var(--sp-4)}
+.attempt{display:flex;flex-direction:column;gap:1px;min-width:132px;
+  background:var(--paper);border:1px solid var(--line);border-radius:var(--r-surface);
+  box-shadow:var(--shadow);padding:7px var(--sp-3);margin-left:-7px;
+  text-decoration:none;transition:transform .12s,border-color .12s}
+.attempt:first-child{margin-left:0}
+.attempt:nth-child(odd){transform:translateY(-3px)}
+.attempt:nth-child(even){transform:translateY(3px)}
+.attempt:hover{transform:translateY(0);border-color:var(--line-strong);z-index:2}
+.attempt-date{color:var(--ink-2);font-size:var(--fs-sm);font-variant-numeric:tabular-nums}
+.attempt-src{color:var(--muted);font-size:var(--fs-xs);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.attempt-best{color:var(--seal);font-size:var(--fs-xs);font-weight:600}
+.attempt.is-best{border-color:var(--seal-line);box-shadow:inset 0 3px 0 var(--seal),var(--shadow)}
+@media(max-width:640px){.attempts{flex-direction:column;gap:6px}
+  .attempt{margin-left:0;transform:none;min-width:0}}
+.cmp-wrap{overflow-x:auto}
+.cmp-table{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed}
+@media(max-width:900px){.cmp-table{min-width:660px}}
+.cmp-table th{font-size:var(--fs-sm);font-weight:600;color:var(--ink-2);text-align:left;
+  padding:0 var(--sp-4) var(--sp-2)}
+.cmp-table td{vertical-align:top;padding:var(--sp-4);font-size:var(--fs);
+  border-bottom:1px solid var(--line)}
+.cmp-table td.c-src{background:var(--paper);border-left:1px solid var(--line)}
+.cmp-table td.c-src .meta{display:block;margin-top:2px}
+.cmp-table td.c-orig{background:var(--paper)}
+.cmp-table td.c-work{background:var(--margin)}
+.cmp-table td.c-orig + td.c-work{border-left:1px solid var(--line)}
+.cmp-table td:last-child{border-right:1px solid var(--line)}
+.cmp-table .verbatim{border-left:0;padding-left:0;max-width:none;margin:0}
+.cmp-table tr.is-best td.c-src{box-shadow:inset 3px 0 0 var(--seal)}
+.cmp-table tr.is-best .verbatim{font-weight:600}
 .sim-item{display:flex;justify-content:space-between;gap:var(--sp-3);align-items:center;
   padding:8px 10px;border:1px solid var(--line);border-radius:var(--r);margin-bottom:6px;background:var(--surface)}
 </style>
@@ -20,7 +51,7 @@
 <section class="page-head">
   <div>
     <h1>{{ entry.head_question }}</h1>
-    <p class="muted small">
+    <p class="meta">
       {{ entry.category_name or '未分类' }}{% if entry.group_name %} · {{ entry.group_name }}{% endif %}
       {% if entry.topic %} · 专题：{{ topics.get(entry.topic, entry.topic) }}{% endif %}
       ｜ 被问 <b>{{ entry.ask_times }}</b> 次 · 出处 {{ entry.source_interview_count }} 场 ·
@@ -33,13 +64,13 @@
 </section>
 
 <section class="card">
-  <h2>相似问题关联 <span class="muted small">（{{ neighbors|length }} 条）</span></h2>
+  <h2>相似问题关联 <span class="meta">{{ neighbors|length }} 条</span></h2>
   {% if neighbors %}
     {% for n in neighbors %}
     <div class="sim-item">
       <div>
         <a href="/knowledge/compare/{{ n.entry.id }}">{{ n.entry.head_question }}</a>
-        <span class="muted small">｜{{ n.entry.group_name or '其他' }}｜被问 {{ n.entry.ask_times }} 次</span>
+        <span class="meta">{{ n.entry.group_name or '其他' }} · 被问 {{ n.entry.ask_times }} 次</span>
       </div>
       <div class="ops">
         {% set suspected = (n.reason or '').startswith('疑似') %}
@@ -54,43 +85,60 @@
     </div>
     {% endfor %}
   {% else %}
-    <p class="muted small">暂无相似问题。可点「搜索并关联」手动建立，或在知识库页点「重算相似关联」。</p>
+    <p class="meta">暂无相似问题，可在下方搜索并手动关联。</p>
   {% endif %}
   <div class="row">
     <input id="sim-q" placeholder="输入要关联的问题文本，例如：缓存是怎么实现的？" style="flex:1 1 320px">
     <button class="btn" id="btn-sim-search">搜索并关联</button>
-    <span class="muted small" id="sim-info"></span>
+    <span class="meta" id="sim-info"></span>
   </div>
   <div id="sim-results"></div>
 </section>
 
 <section class="card">
-  <h2>历史作答对比 <span class="muted small">（共 {{ rows|length }} 次作答）</span></h2>
-  <p class="muted small">忠实原文为逐字引用（含口误卡壳）；优化建议与批注独立成列——对比只看差异，不改写事实。</p>
+  <h2>历史作答对比 <span class="meta">共 {{ rows|length }} 次作答</span></h2>
+  <p class="card-sub">逐字引用历史原文（含口误卡壳），优化建议与批注独立成列。</p>
   {% if rows %}
+  {# 作答叠层：同一道题每答过一次就多一张纸，错位堆着、只露出日期与场合。
+     这是「跨场累积」在视觉上的形状——答得越多，这摞纸越厚。 #}
+  <div class="attempts" role="list" aria-label="这道题的历史作答">
+    {% for r in rows %}
+    <a class="attempt{{ ' is-best' if r.is_best else '' }}" role="listitem"
+       href="/interviews/{{ r.interview_id }}/qa/{{ r.id }}"
+       title="{{ r.interview_title or '（未知面试）' }}">
+      <span class="attempt-date">{{ (r.interview_at or r.interview_date or '')[:10] or '—' }}</span>
+      <span class="attempt-src">{% if r.interview_company %}{{ r.interview_company }}{% else %}{{ r.interview_title or '未知面试' }}{% endif %}</span>
+      {% if r.is_best %}<span class="attempt-best">最佳</span>{% endif %}
+    </a>
+    {% endfor %}
+  </div>
+  <div class="cmp-wrap">
   <table class="cmp-table" id="cmp-table">
     <caption class="sr-only">同一考点的历史作答对比</caption>
+    <colgroup>
+      <col style="width:15%"><col style="width:44%"><col style="width:24%"><col style="width:17%">
+    </colgroup>
     <thead><tr>
-      <th>来源面试</th><th>忠实原文回答</th><th>优化建议</th><th>批注 / 操作</th>
+      <th class="c-src">来源面试</th><th class="c-orig">忠实原文回答</th><th class="c-work">优化建议</th><th>批注 / 操作</th>
     </tr></thead>
     <tbody>
       {% for r in rows %}
-      <tr class="{{ 'cmp-extra' if loop.index > 20 else '' }}" {% if loop.index > 20 %}hidden{% endif %}>
-        <td>
+      <tr class="{{ 'cmp-extra' if loop.index > 20 else '' }}{{ ' is-best' if r.is_best else '' }}" {% if loop.index > 20 %}hidden{% endif %}>
+        <td class="c-src">
           <a href="/interviews/{{ r.interview_id }}/qa/{{ r.id }}">{{ r.interview_title or '（未知面试）' }}</a>
-          <div class="muted small">{{ (r.interview_at or r.interview_date or '')[:16] }}
+          <div class="meta">{{ (r.interview_at or r.interview_date or '')[:16] }}
             {% if r.interview_company %}· {{ r.interview_company }}{% endif %}</div>
           {% if r.is_best %}<span class="chip s-confirmed">最佳作答</span>{% endif %}
         </td>
-        <td>
+        <td class="c-orig">
           {% for a in r.answers %}
           <p class="verbatim">{{ a.corrected_text if a.is_corrected else a.extract_text }}</p>
           {% endfor %}
           {% if not r.answers %}<span class="warn-text small">（无回答）</span>{% endif %}
-          <div class="muted small">问题原文：{{ r.q_text }}</div>
+          <div class="meta">问题原文：{{ r.q_text }}</div>
         </td>
-        <td class="small">{{ r.optimization or '（未填写）' }}</td>
-        <td>
+        <td class="c-work small">{{ r.optimization or '（未填写）' }}</td>
+        <td class="c-work">
           {% if r.annotation %}<div class="small">{{ r.annotation }}</div>{% endif %}
           <button class="btn small" data-best="{{ r.id }}">{{ '取消最佳' if r.is_best else '标为最佳作答' }}</button>
         </td>
@@ -98,8 +146,9 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
   {% else %}
-  <p class="muted small">该条目还没有关联到具体作答记录。</p>
+  <p class="meta">该条目还没有关联到具体作答记录。</p>
   {% endif %}
   {% if rows|length > 20 %}
   <div class="row">
@@ -198,7 +247,7 @@ document.getElementById('btn-sim-search').addEventListener('click', async () => 
     d.items.filter(i => i.entry_id !== ENTRY_ID).forEach(i => {
       const row = document.createElement('div');
       row.className = 'sim-item';
-      row.innerHTML = `<div>${i.head_question} <span class="muted small">｜${i.group_name || '其他'}｜相似度 ${(i.score*100).toFixed(0)}%</span></div>`;
+      row.innerHTML = `<div>${i.head_question} <span class="meta">${i.group_name || '其他'} · 相似度 ${(i.score*100).toFixed(0)}%</span></div>`;
       const link = document.createElement('button');
       link.className = 'btn small';
       link.textContent = '关联';

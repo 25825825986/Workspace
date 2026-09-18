@@ -164,6 +164,67 @@ def main() -> int:
           " / alt 属性：", len(re.findall(r"\balt=", all_tpl)))
     print("键盘快捷键：", len(re.findall(r"keydown", all_tpl)), "处")
     print("原生 confirm/alert/prompt：", len(re.findall(r"confirm\(|alert\(|prompt\(", all_tpl)), "处")
+
+    print()
+    print("=" * 78)
+    print("六、设计系统硬指标（边注本，见 docs/14-frontend-design-plan.md §7）")
+    print("=" * 78)
+    base_html = (ROOT / "app/templates/base.html").read_text(encoding="utf-8")
+    settings_html = (ROOT / "app/templates/settings.html").read_text(encoding="utf-8")
+    config_py = (ROOT / "app/config.py").read_text(encoding="utf-8")
+    fail: list[str] = []
+
+    def gate(label: str, ok: bool, detail: str = "") -> None:
+        print(f"  {'✓' if ok else '✗'} {label}" + (f"　{detail}" if detail else ""))
+        if not ok:
+            fail.append(label)
+
+    # --- 三层面色 token 齐备，且原文面是最亮的面 ---
+    gate("三层面色 token（paper / desk / margin）在浅色与深色两套都定义",
+         css.count("--paper:") == 2 and css.count("--desk:") == 2 and css.count("--margin:") == 2)
+    gate("原文面是直角（--r-surface:0，.card 与阅读面用它）",
+         "--r-surface:0" in css and "border-radius:var(--r-surface)" in css)
+    gate("原文用宋体栈、界面用黑体栈（--serif / --font 各自独立）",
+         "--serif:" in css and "Noto Serif SC" in css and "--font:" in css and "Noto Sans SC" in css)
+    gate("原文排版 token：字号 ≥15.5px、行高 ≥1.85",
+         "--fs-read:16.5px" in css and "--lh-read:1.9" in css)
+    gate("阅读面宽度按 40 全角字以内取值（655px / 16.5px ≈ 39.7）",
+         "--maxw-read:655px" in css)
+
+    # --- 颜色只做状态：主操作是墨黑，彩色只剩 seal / flag ---
+    gate("主操作 = 墨黑（--brand 指向 --ink，不再用彩色主按钮）", "--brand:var(--ink)" in css)
+    gate("内容语义色只有两个（--seal / --flag）",
+         "--seal:" in css and "--flag:" in css and "--brand:#2563eb" not in css,
+         "旧的默认蓝 #2563eb 已移除")
+    gate("强调色 accent-color 收进墨黑（原生 radio/checkbox 不再是系统蓝）",
+         "accent-color:var(--ink)" in css)
+
+    # --- §5 六项模板化痕迹清理 ---
+    footer = re.search(r'<footer class="wrap foot">(.*?)</footer>', base_html, re.S)
+    gate("页脚不再用「·」串成一串元信息", bool(footer) and "·" not in footer.group(1))
+    gate("模型徽标不再把模型 ID 用「·」拼进顶栏", '"·"' not in config_py.split("def mode_badge")[1][:400])
+    # 「→」只允许出现在方向性导航上（与「← 上一题」成对的上一题/下一题/返回），
+    # 内容链接与普通按钮的装饰箭头在阶段一已全部删除。
+    NAV_ARROW = re.compile(r">[^<>]{0,24}(上一题|下一题|上一步|下一步|返回)[^<>]{0,4}→</(?:a|button)>")
+    arrow_links = re.findall(r">[^<>]{0,24}→</(?:a|button)>", all_tpl)
+    bad_arrows = [a for a in arrow_links if not NAV_ARROW.search(a)]
+    gate("装饰性「→」已删（只剩与「← 上一题」成对的方向性导航箭头）",
+         not bad_arrows, f"发现非导航箭头 {bad_arrows[:3]}")
+    gate("设置页不再用装饰性圈码 ①-⑤",
+         not re.search(r"[①②③④⑤]", settings_html))
+    gate("删掉了每张卡片入场都播一次的动画（.ui-rise）",
+         "ui-rise" not in css and not re.search(r"\.card,\.rec-card,\.qa-row,\.entry\{animation", css))
+    gate("记录卡元信息分组（.rec-when / .rec-rest 而不是空格硬拼）",
+         ".rec-when" in css and ".rec-rest" in css)
+
+    print()
+    print("=" * 78)
+    if fail:
+        print(f"设计系统硬指标未达标 {len(fail)} 项：")
+        for f in fail:
+            print("  -", f)
+        return 1
+    print("设计系统硬指标全部达标。")
     return 0
 
 

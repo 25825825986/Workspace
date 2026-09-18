@@ -14,28 +14,114 @@
 {% block content %}
 <nav class="crumbs"><a href="/">面试记录</a> / {{ iv.title }}</nav>
 
-<section class="card">
-  <div class="between">
-    <div>
-      <h2>{{ iv.title }}</h2>
-      <p class="muted small">
-        {{ interview_types.get(iv.interview_type, iv.interview_type) }}
-        {% if iv.company %}· {{ iv.company }}{% endif %}
-        {% if iv.position %}· {{ iv.position }}{% endif %}
-        {% if iv.location %}· {{ iv.location }}{% endif %}
-        {% if iv.interview_at %}· {{ iv.interview_at | dt }}{% elif iv.date %}· {{ iv.date }}{% endif %}
-        {% if iv.duration_minutes %}· 时长 {{ iv.duration_minutes | duration }}{% endif %}
-        {% if iv.expected_salary %}· 期望 {{ iv.expected_salary }}{% endif %}
-        <br>文本格式：{{ fmt_label }} · 解析器：{{ iv.parser_version or '-' }}
-      </p>
-      <p>
-        {% for sp in iv.speaker_map %}
-        <span class="chip">{{ sp.label }} → {{ '面试官' if sp.role == 'interviewer' else ('我(回答)' if sp.role == 'self' else ('其他' if sp.role == 'other' else '待定')) }}{% if sp.source == 'inferred' %}<i class="muted">(推断)</i>{% endif %}</span>
-        {% endfor %}
-      </p>
-    </div>
-    <div class="ops">
-      <span class="chip s-review">共 {{ qas|length }} 题{% if pending %} · {{ pending }} 待确认{% endif %}</span>
+{% if qas %}
+<section class="sheet">
+  {# ---------- 主栏：本场原文。连续阅读流，不再一题一张卡 ---------- #}
+  <div class="sheet-main">
+    <p class="sheet-label">本场原文问答</p>
+    <h1>{{ iv.title }}</h1>
+    <p class="meta meta-row">
+      <span>{{ interview_types.get(iv.interview_type, iv.interview_type) }}</span>
+      {% if iv.company %}<span>{{ iv.company }}</span>{% endif %}
+      {% if iv.position %}<span>{{ iv.position }}</span>{% endif %}
+      {% if iv.location %}<span>{{ iv.location }}</span>{% endif %}
+      {% if iv.interview_at %}<span class="nowrap">{{ iv.interview_at | dt }}</span>
+      {% elif iv.date %}<span class="nowrap">{{ iv.date }}</span>{% endif %}
+      {% if iv.duration_minutes %}<span class="nowrap">{{ iv.duration_minutes | duration }}</span>{% endif %}
+      {% if iv.expected_salary %}<span class="nowrap">期望 {{ iv.expected_salary }}</span>{% endif %}
+    </p>
+    <p class="speaker-strip">
+      {% for sp in iv.speaker_map %}
+      {% set _role = '面试官' if sp.role == 'interviewer' else ('我' if sp.role == 'self' else ('其他' if sp.role == 'other' else '待定')) %}<span class="speaker-pair"><code>{{ sp.label }}</code>{% if _role != sp.label %}{{ _role }}{% endif %}{% if sp.source == 'inferred' %}<em>推断</em>{% endif %}</span>
+      {% endfor %}
+    </p>
+
+    {% for q in qas %}
+    <article class="qa-row qa-block" data-qa="{{ q.id }}">
+      <header class="qa-blockhead">
+        <span class="qa-seq">#{{ q.seq }}</span>
+        <span class="chip {{ 's-pending' if q.status in ('auto','pending') else 's-confirmed' }}">{{ status_label.get(q.status, q.status) }}</span>
+        {% if q.entry_id %}<span class="chip">已入库</span>{% endif %}
+        <span class="chip">{{ q.category_name or '未分类' }}</span>
+        {% if q.q_is_corrected %}<span class="chip">已合并/修正</span>{% endif %}
+        <span class="qa-blockops">
+          <button class="btn small" data-toggle-answer="{{ q.id }}" aria-pressed="false">
+            <svg class="ico" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><use href="#i-eye"></use></svg>
+            <span class="toggle-label">隐藏答案</span>
+          </button>
+          <a class="btn small" href="/interviews/{{ iv.id }}/qa/{{ q.id }}">复盘</a>
+          {% if not q.entry_id %}
+            {% if q.status in ('auto','pending') %}
+            <button class="btn small" data-post="/api/qa/{{ q.id }}/confirm">确认</button>
+            {% else %}
+            <button class="btn small" data-post="/api/qa/{{ q.id }}/merge">加入知识库</button>
+            {% endif %}
+          {% endif %}
+          <button class="btn small" type="button" data-quick-edit="{{ q.id }}"
+                  aria-expanded="false" aria-controls="quick-{{ q.id }}">快速编辑</button>
+          <span class="pop-wrap">
+            <button class="btn small" type="button" data-popover-trigger
+                    aria-haspopup="true" aria-expanded="false" title="更多校对操作">更多</button>
+            <div class="popover-menu" data-popover hidden role="menu">
+              <button class="btn small" role="menuitem" data-post="/api/qa/{{ q.id }}/merge-next"
+                      data-confirm-title="合并下一条"
+                      data-confirm="将下一条问答合并到本条（用于修正被误拆的问答）？">合并下一条</button>
+              <button class="btn small" role="menuitem" data-split="/api/qa/{{ q.id }}/split"
+                      data-answers="{{ q.answers|length }}">拆分</button>
+              <button class="btn small danger" role="menuitem" data-post="/api/qa/{{ q.id }}/delete"
+                      data-confirm-title="删除问答"
+                      data-confirm="删除这条问答？列表中将不再显示（可撤销）。">删除</button>
+            </div>
+          </span>
+        </span>
+      </header>
+
+      <div class="turn turn-q">
+        <p class="turn-who">面试官</p>
+        <p class="verbatim"><a class="qa-q" href="/interviews/{{ iv.id }}/qa/{{ q.id }}">{{ q.q_corrected_text if q.q_is_corrected else q.q_text }}</a></p>
+        {% if q.q_is_corrected and q.q_corrected_text %}<p class="meta">修正前：{{ q.q_text }}</p>{% endif %}
+      </div>
+
+      <div class="turn turn-a">
+        <p class="turn-who">我</p>
+        <div class="qa-answer" data-answer-of="{{ q.id }}">
+          <div class="answer-body">
+            {% if q.answers %}
+              {% for a in q.answers %}
+              <p class="verbatim">{{ a.corrected_text if a.is_corrected else a.extract_text }}</p>
+              {% endfor %}
+            {% else %}
+              <p class="gap">这一段没有提取到回答<a href="/interviews/{{ iv.id }}/qa/{{ q.id }}">去核对原文</a></p>
+            {% endif %}
+          </div>
+          <div class="answer-mask">答案已隐藏 —— 点右上角「显示答案」查看</div>
+        </div>
+      </div>
+
+      <form class="quick-edit" id="quick-{{ q.id }}" hidden
+            data-quick-form="{{ q.id }}" data-qa-status="{{ q.status }}">
+        <div class="grid2">
+          <label>下次怎么说更好
+            <textarea name="optimization" rows="2" placeholder="下次怎么说更好…">{{ q.optimization or '' }}</textarea>
+          </label>
+          <label>当下记一笔
+            <textarea name="annotation" rows="2" placeholder="当时的感受 / 待办…">{{ q.annotation or '' }}</textarea>
+          </label>
+        </div>
+        <div class="row">
+          <button class="btn small primary" type="submit">保存本题</button>
+          <span class="meta" id="save-state-{{ q.id }}"></span>
+        </div>
+      </form>
+    </article>
+    {% endfor %}
+  </div>
+
+  {# ---------- 边栏：本场的操作与复习控制（工作层，不是证据） ---------- #}
+  <aside class="sheet-margin">
+    <p class="sheet-label">本场操作</p>
+    <p class="margin-stat">共 {{ qas|length }} 题{% if pending %}<span class="flag-text">{{ pending }} 题待确认</span>{% endif %}</p>
+    <div class="stack">
       <button class="btn" data-post="/api/interviews/{{ iv.id }}/confirm-all"
               data-confirm-title="全部确认" data-confirm="把本场所有待确认题目标记为已确认？">全部确认</button>
       <button class="btn" data-post="/api/interviews/{{ iv.id }}/merge-all"
@@ -45,97 +131,33 @@
               data-export-title="{{ iv.title }}">导出预览</button>
       <a class="btn primary" href="/download/interviews/{{ iv.id }}.md">下载 .md</a>
     </div>
-  </div>
-</section>
 
-<section class="card toolbar-card">
-  <div class="between">
-    <div class="ops">
-      <button class="btn small" id="btn-hide-all">全部隐藏答案</button>
-      <button class="btn small" id="btn-show-all">全部显示答案</button>
-      <span class="muted small" id="save-state">隐藏状态本机记忆</span>
+    <p class="sheet-label">复习</p>
+    <div class="stack">
+      <button class="btn" id="btn-hide-all">全部隐藏答案</button>
+      <button class="btn" id="btn-show-all">全部显示答案</button>
+      <span class="meta" id="save-state">隐藏状态本机记忆</span>
     </div>
-    <span class="muted small">复习：隐藏后逐题自测；校对：每题「更多」里有合并 / 拆分 / 删除</span>
-  </div>
-</section>
 
-{% if qas %}
-<section class="qa-list">
-  {% for q in qas %}
-  <article class="qa-row card" data-qa="{{ q.id }}">
-    <div class="qa-head">
-      <div class="qa-question">
-        <span class="qa-seq">#{{ q.seq }}</span>
-        <span class="chip {{ 's-pending' if q.status in ('auto','pending') else 's-confirmed' }}">{{ status_label.get(q.status, q.status) }}</span>
-        {% if q.direction == 'reverse' %}<span class="chip">反问</span>{% endif %}
-        {% if q.entry_id %}<span class="chip">已入库</span>{% endif %}
-        <span class="chip">{{ q.category_name or '未分类' }}</span>
-        {% if q.q_is_corrected %}<span class="chip">已合并/修正</span>{% endif %}
-        <a class="qa-q" href="/interviews/{{ iv.id }}/qa/{{ q.id }}">{{ q.q_corrected_text if q.q_is_corrected else q.q_text }}</a>
-        {% if q.q_is_corrected and q.q_corrected_text %}
-        <p class="muted small">原始提取：{{ q.q_text }}</p>
-        {% endif %}
+    <details class="help">
+      <summary>复习与校对怎么用？</summary>
+      <div class="help-body">
+        <p><b>复习</b>：点「全部隐藏答案」后逐题自测，再点每题右上角「显示答案」核对；隐藏状态会记住。</p>
+        <p><b>校对</b>：题目被误切时，用每题「更多」里的合并 / 拆分 / 删除修正。</p>
       </div>
-      <div class="qa-actions">
-        <button class="btn small" data-toggle-answer="{{ q.id }}" aria-pressed="false">
-          <svg class="ico" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><use href="#i-eye"></use></svg>
-          <span class="toggle-label">隐藏答案</span>
-        </button>
-        <a class="btn small primary" href="/interviews/{{ iv.id }}/qa/{{ q.id }}">复盘</a>
-        {% if not q.entry_id %}
-          {% if q.status in ('auto','pending') %}
-          <button class="btn small" data-post="/api/qa/{{ q.id }}/confirm">确认</button>
-          {% else %}
-          <button class="btn small" data-post="/api/qa/{{ q.id }}/merge">加入知识库</button>
-          {% endif %}
-        {% endif %}
-        <button class="btn small" type="button" data-quick-edit="{{ q.id }}"
-                aria-expanded="false" aria-controls="quick-{{ q.id }}">快速编辑</button>
-        <span class="pop-wrap">
-          <button class="btn small" type="button" data-popover-trigger
-                  aria-haspopup="true" aria-expanded="false" title="更多校对操作">更多</button>
-          <div class="popover-menu" data-popover hidden role="menu">
-            <button class="btn small" role="menuitem" data-post="/api/qa/{{ q.id }}/merge-next"
-                    data-confirm-title="合并下一条"
-                    data-confirm="将下一条问答合并到本条（用于修正被误拆的问答）？">合并下一条</button>
-            <button class="btn small" role="menuitem" data-split="/api/qa/{{ q.id }}/split"
-                    data-answers="{{ q.answers|length }}">拆分</button>
-            <button class="btn small danger" role="menuitem" data-post="/api/qa/{{ q.id }}/delete"
-                    data-confirm-title="删除问答"
-                    data-confirm="删除这条问答？列表中将不再显示（可撤销）。">删除</button>
-          </div>
-        </span>
+    </details>
+
+    <details class="help">
+      <summary>本场解析信息</summary>
+      <div class="help-body">
+        <dl class="kv-list">
+          <dt>文本格式</dt><dd>{{ fmt_label }}</dd>
+          <dt>解析器</dt><dd>{{ iv.parser_version or '-' }}</dd>
+          <dt>发言段</dt><dd>{{ iv.speaker_map|length }} 个说话人标签</dd>
+        </dl>
       </div>
-    </div>
-    <form class="quick-edit" id="quick-{{ q.id }}" hidden
-          data-quick-form="{{ q.id }}" data-qa-status="{{ q.status }}">
-      <div class="grid2">
-        <label>优化建议（本场工作区）
-          <textarea name="optimization" rows="2" placeholder="下次怎么说更好…">{{ q.optimization or '' }}</textarea>
-        </label>
-        <label>批注
-          <textarea name="annotation" rows="2" placeholder="当时的感受 / 待办…">{{ q.annotation or '' }}</textarea>
-        </label>
-      </div>
-      <div class="row">
-        <button class="btn small primary" type="submit">保存本题</button>
-        <span class="muted small" id="save-state-{{ q.id }}"></span>
-      </div>
-    </form>
-    <div class="qa-answer" data-answer-of="{{ q.id }}">
-      <div class="answer-body">
-        {% if q.answers %}
-          {% for a in q.answers %}
-          <p class="verbatim">{{ a.corrected_text if a.is_corrected else a.extract_text }}</p>
-          {% endfor %}
-        {% else %}
-          <p class="warn-text small">未提取到回答：可能是候选人未作答，或面试官连续提问被误切。请人工核对原文。</p>
-        {% endif %}
-      </div>
-      <div class="answer-mask">答案已隐藏 —— 点右上角「显示答案」查看</div>
-    </div>
-  </article>
-  {% endfor %}
+    </details>
+  </aside>
 </section>
 {% else %}
 <section class="card empty-state"><p>本场未提取到问答。返回导入页重新导入，或检查说话人角色是否指定正确。</p></section>

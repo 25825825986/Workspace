@@ -1,78 +1,79 @@
 {% extends "base.html" %}
 {% block content %}
-<nav class="crumbs"><a href="/interviews/{{ iv.id }}">← 返回问答列表</a> ｜ 第 {{ pos + 1 }} / {{ all_qas|length }} 题</nav>
+<nav class="crumbs"><a href="/interviews/{{ iv.id }}">← 返回问答列表</a>　第 {{ pos + 1 }} / {{ all_qas|length }} 题</nav>
 
-<section class="card">
-  <div class="between">
-    <div>
-      <h2>#{{ qa.seq }} 单题复盘</h2>
-      <p class="muted small">
-        {{ iv.title }}
-        {% if iv.company %}· {{ iv.company }}{% endif %}
-        {% if iv.position %}· {{ iv.position }}{% endif %}
-        {% if iv.location %}· {{ iv.location }}{% endif %}
-        {% if iv.interview_at %}· {{ iv.interview_at | dt }}{% endif %}
-        {% if iv.duration_minutes %}· 时长 {{ iv.duration_minutes | duration }}{% endif %}
-      </p>
-    </div>
-    <div class="ops">
-      <span class="chip {{ 's-pending' if qa.status in ('auto','pending') else 's-confirmed' }}">{{ status_label.get(qa.status, qa.status) }}</span>
-      <span class="chip">{{ qa.category_name or '未分类' }}</span>
-      {% if qa.direction == 'reverse' %}<span class="chip">反问环节</span>{% endif %}
-      {% if qa.entry_id %}<span class="chip">已纳入面经库</span>{% endif %}
-    </div>
+<section class="page-head">
+  <div>
+    <h1>#{{ qa.seq }} 单题复盘</h1>
+    <p class="meta meta-row">
+      <span>{{ iv.title }}</span>
+      {% if iv.company %}<span>{{ iv.company }}</span>{% endif %}
+      {% if iv.position %}<span>{{ iv.position }}</span>{% endif %}
+      {% if iv.location %}<span>{{ iv.location }}</span>{% endif %}
+      {% if iv.interview_at %}<span class="nowrap">{{ iv.interview_at | dt }}</span>{% endif %}
+      {% if iv.duration_minutes %}<span class="nowrap">{{ iv.duration_minutes | duration }}</span>{% endif %}
+    </p>
+  </div>
+  <div class="ops">
+    <span class="chip {{ 's-pending' if qa.status in ('auto','pending') else 's-confirmed' }}">{{ status_label.get(qa.status, qa.status) }}</span>
+    <span class="chip">{{ qa.category_name or '未分类' }}</span>
+    {% if qa.direction == 'reverse' %}<span class="chip">反问环节</span>{% endif %}
+    {% if qa.entry_id %}<span class="chip">已纳入面经库</span>{% endif %}
   </div>
 </section>
 
-<div class="duo">
-  <section class="card left-pane">
-    <h3>忠实原文（只读提取，R2）</h3>
+<section class="sheet">
+  {# ---------- 主栏：原文。全站最亮的面，只读 ---------- #}
+  <div class="sheet-main">
+    <p class="sheet-label">忠实原文</p>
+    <p class="card-sub">只读提取。右侧批注永远改不到这里的任何一句话。</p>
 
-    <div class="qblock">
-      <p class="tagline">问题 · {{ speaker.get(qa.q_speaker_id, '未知') }}</p>
+    <article class="turn turn-q">
+      <p class="turn-who">面试官</p>
       {% set _qt = qa.q_corrected_text if qa.q_is_corrected else qa.q_text %}
       <p class="verbatim">{{ _qt }}</p>
-      {% if qa.q_is_corrected %}<p class="muted small">（原提取：{{ qa.q_text }}）</p>{% endif %}
-      <blockquote class="quote">
-        {% if qa.q_source_ref and qa.q_source_ref.quote %}{{ qa.q_source_ref.quote }}{% else %}（原文区间缺失）{% endif %}
-        {% if qa.q_source_ref %}<span class="muted small"> [字符区间 {{ qa.q_source_ref.start }}-{{ qa.q_source_ref.end }}]</span>{% endif %}
-      </blockquote>
+      {% if qa.q_is_corrected %}<p class="meta">修正前：{{ qa.q_text }}</p>{% endif %}
+      {% if qa.q_source_ref %}
+      <p class="prov">原文区间 {{ qa.q_source_ref.start }}–{{ qa.q_source_ref.end }}{% if qa.q_is_corrected and qa.q_source_ref.quote %}　原句 <span class="prov-src">{{ qa.q_source_ref.quote }}</span>{% endif %}</p>
+      {% else %}
+      <p class="prov warn-text">原文区间缺失——这段未与转写稿对齐，请核对</p>
+      {% endif %}
       <details class="fixer"><summary>问题提取有误？标记修正</summary>
         <textarea id="fix-q" rows="2" placeholder="粘贴修正后的问题文本（忠实原文层面修正，非润色）">{{ qa.q_corrected_text or qa.q_text }}</textarea>
         <button class="btn small" id="fix-q-btn">保存问题修正</button>
       </details>
-    </div>
+    </article>
 
     {% for a in qa.answers %}
-    <div class="ablock">
-      <p class="tagline">回答 {{ loop.index }} · {{ speaker.get(a.speaker_id, '未知') }}
-        {% if a.is_corrected %}<span class="chip">已修正</span>{% endif %}</p>
+    <article class="turn turn-a">
+      <p class="turn-who">我 · 回答 {{ loop.index }}{% if a.is_corrected %}（已修正）{% endif %}</p>
       <p class="verbatim">{{ a.corrected_text if a.is_corrected else a.extract_text }}</p>
-      {% if a.is_corrected %}<p class="muted small">（原始忠实提取：{{ a.extract_text }}）</p>{% endif %}
-      <blockquote class="quote">
-        {% if a.source_ref and a.source_ref.quote %}{{ a.source_ref.quote }}{% else %}<span class="warn-text">原文引用缺失——该段未与原文对齐，请核对或修正</span>{% endif %}
-        {% if a.source_ref %}<span class="muted small"> [字符区间 {{ a.source_ref.start }}-{{ a.source_ref.end }}]</span>{% endif %}
-      </blockquote>
+      {% if a.is_corrected %}<p class="meta">修正前：{{ a.extract_text }}</p>{% endif %}
+      {% if a.source_ref %}
+      <p class="prov">原文区间 {{ a.source_ref.start }}–{{ a.source_ref.end }}{% if a.is_corrected and a.source_ref.quote %}　原句 <span class="prov-src">{{ a.source_ref.quote }}</span>{% endif %}</p>
+      {% else %}
+      <p class="prov warn-text">原文区间缺失——这段未与转写稿对齐，请核对或修正</p>
+      {% endif %}
       <details class="fixer"><summary>这段回答提取有误？标记修正</summary>
         <textarea data-fix-ans data-idx="{{ loop.index0 }}" rows="3"
           placeholder="粘贴修正后的回答文本（修正提取错误，不用于润色改写）">{{ a.corrected_text or '' }}</textarea>
         <button class="btn small" data-fix-ans-btn data-idx="{{ loop.index0 }}">保存回答修正</button>
       </details>
-    </div>
+    </article>
     {% else %}
-    <p class="muted">（无回答内容）</p>
+    <p class="meta">这一题没有提取到回答内容。</p>
     {% endfor %}
-  </section>
+  </div>
 
-  <section class="card right-pane" data-autosave="/api/qa/{{ qa.id }}/update"
-           data-autosave-payload='{"optimization":"#edit-optimization","annotation":"#edit-annotation"}'>
-    <h3>优化建议（独立栏）＋ 批注</h3>
-    <p class="muted small">优化建议与批注只影响"下次怎么更好"，永不改写上方原文。修改会自动保存（停止输入约 1 秒后）。</p>
-    <label>优化建议
-      <textarea id="edit-optimization" rows="5" placeholder="如：先给结论再展开；补充具体数据/例子；注意开头避免卡壳…">{{ qa.optimization or '' }}</textarea>
+  {# ---------- 边栏：批注。内凹面，永远在原文之外 ---------- #}
+  <aside class="sheet-margin" data-autosave="/api/qa/{{ qa.id }}/update"
+         data-autosave-payload='{"optimization":"#edit-optimization","annotation":"#edit-annotation"}'>
+    <p class="sheet-label">优化建议与批注</p>
+    <label>下次怎么说更好
+      <textarea id="edit-optimization" rows="5" placeholder="如：先给结论再展开；补充具体数据；开头别卡壳">{{ qa.optimization or '' }}</textarea>
     </label>
-    <label>批注
-      <textarea id="edit-annotation" rows="3" placeholder="对本题的记录：当时的感受、要点补充、下次要看的资料…">{{ qa.annotation or '' }}</textarea>
+    <label>当下记一笔
+      <textarea id="edit-annotation" rows="3" placeholder="当时的感受、要点补充、下次要看的资料">{{ qa.annotation or '' }}</textarea>
     </label>
     <div class="grid2">
       <label>状态
@@ -97,10 +98,10 @@
       {% else %}
       <a class="btn" href="/knowledge/compare/{{ qa.entry_id }}">查看知识库对比</a>
       {% endif %}
-      <span class="muted small" id="save-state">未修改</span>
+      <span class="meta" id="save-state">未修改</span>
     </div>
-  </section>
-</div>
+  </aside>
+</section>
 
 <nav class="pager">
   {% if prev %}<a class="btn" href="/interviews/{{ iv.id }}/qa/{{ prev.id }}">← 上一题</a>{% else %}<span></span>{% endif %}

@@ -7,7 +7,7 @@
 <section class="page-head">
   <div>
     <h1>{{ session.title }} · 模拟报告</h1>
-    <p class="muted small">
+    <p class="meta">
       模式：{{ {'whole': '整场复盘', 'bank': '题库随机', 'resume': '简历+AI'}.get(session.mode, session.mode) }}
       ｜ 开始：{{ (session.started_at or '')[:16] }}
       {% if session.finished_at %}｜ 结束：{{ session.finished_at[:16] }}{% endif %}
@@ -39,7 +39,8 @@
 
 {% if weak %}
 <section class="card">
-  <h2>需要加强的题目 <span class="muted small">（标记"不确定/不会"或未作答）</span></h2>
+  <h2>需要加强的题目</h2>
+  <p class="card-sub">标记「不确定 / 不会」或未作答的题目。</p>
   <table class="tbl">
     <thead><tr><th>#</th><th>问题</th><th>标记</th><th>建议</th></tr></thead>
     <tbody>
@@ -51,7 +52,7 @@
         <td class="ops">
           {% if t.reference_entry_id %}
           <a class="btn small" href="/knowledge/compare/{{ t.reference_entry_id }}">看知识库对比</a>
-          {% else %}<span class="muted small">AI 生成题：可在知识库手动沉淀</span>{% endif %}
+          {% else %}<span class="meta">AI 生成题，可在知识库手动沉淀</span>{% endif %}
         </td>
       </tr>
     {% endfor %}
@@ -66,7 +67,7 @@
   <div class="entry">
     <div class="between">
       <b>#{{ t.seq }} {{ t.question_text }}</b>
-      <span class="muted small">
+      <span class="meta">
         {{ {'whole': '原场题目', 'bank': '题库抽题', 'ai': 'AI 生成'}.get(t.source, t.source) }}
         {% if t.is_follow_up %}· 追问{% endif %}
         {% if t.elapsed_sec %}· 用时 {{ t.elapsed_sec }}s{% endif %}
@@ -83,7 +84,7 @@
         {% if t.reference_answer %}<p class="verbatim small">{{ t.reference_answer }}</p>{% endif %}
         <p class="small">{{ t.reference_tips or '（无）' }}</p>
         {% if t.reference_entry_id %}
-        <p class="small"><a href="/knowledge/compare/{{ t.reference_entry_id }}">知识库对比 →</a></p>
+        <p class="small"><a href="/knowledge/compare/{{ t.reference_entry_id }}">知识库对比</a></p>
         {% endif %}
       </div>
     </div>

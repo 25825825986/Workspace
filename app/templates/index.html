@@ -4,7 +4,14 @@
 <section class="page-head">
   <div>
     <h1>面试记录</h1>
-    <p class="muted">每次导入的面试都会保存在这里：点开查看问答、逐题复习、导出复盘报告。</p>
+    <p class="rec-status">
+      <span><b>{{ stats.interviews }}</b> 场面试</span>
+      <span><b>{{ stats.qa_total }}</b> 道题</span>
+      <span><b>{{ stats.companies }}</b> 家公司在库</span>
+      {% if stats.qa_pending %}
+      <a class="rec-status-flag" href="/?only=pending">{{ stats.qa_pending }} 题待确认</a>
+      {% endif %}
+    </p>
   </div>
   <div class="ops">
     <button class="btn" type="button" id="palette-hint" title="全局搜索（⌘K）">
@@ -14,13 +21,6 @@
       <svg class="ico" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><use href="#i-plus"></use></svg>导入面试
     </a>
   </div>
-</section>
-
-<section class="stats-row">
-  <div class="stat"><b>{{ stats.interviews }}</b><span>面试场次</span></div>
-  <div class="stat"><b>{{ stats.qa_total }}</b><span>累计题目</span></div>
-  <div class="stat"><b>{{ stats.qa_pending }}</b><span>待确认题目</span></div>
-  <div class="stat"><b>{{ stats.companies }}</b><span>覆盖公司</span></div>
 </section>
 
 <form class="toolbar card" method="get" action="/" role="search">
@@ -42,7 +42,7 @@
   </select>
   <button class="btn primary" type="submit">筛选</button>
   {% if search or only or sort != 'recent' %}<a class="btn" href="/">重置</a>{% endif %}
-  <span class="muted small" id="load-more-count">已显示 {{ interviews|length }} / 共 {{ total }}</span>
+  <span class="meta" id="load-more-count">已显示 {{ interviews|length }} / 共 {{ total }}</span>
 </form>
 
 {% if interviews %}

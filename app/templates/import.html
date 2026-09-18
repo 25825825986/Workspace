@@ -3,51 +3,58 @@
 <section class="page-head">
   <div>
     <h1>导入面试</h1>
-    <p class="muted">三步：① 基本信息（可全部留空）→ ② 粘贴转写文本并确认说话人角色 → ③ 创建并解析。</p>
+    <p class="muted">粘贴一份面试转写文本，系统会切分成问答并识别说话人角色。</p>
   </div>
 </section>
 
 {% if extractor_mode != 'deepseek' %}
-<p class="hint">当前为「{{ mode_badge.text }}」：使用本地规则切分。如需 AI 角色推断与问答抽取，请到
-  <a href="/settings">设置</a> 启用 AI 模式并配置 API Key。</p>
+<p class="hint">当前为「{{ mode_badge.text }}」：仅本地规则切分。<a href="/settings">启用 AI</a> 可由模型推断角色并抽取问答。</p>
 {% endif %}
 
 <div id="errbox" hidden></div>
 
 <section class="card">
-  <h2>① 基本信息 <span class="muted small">（除转写文本外，其余字段都可留空）</span></h2>
+  <h2>① 基本信息</h2>
+  <p class="card-sub">除转写文本外都可留空，只填你知道的即可。</p>
   <div class="grid3">
     <label>面试公司 <input id="f-company" placeholder="如：字节跳动"></label>
     <label>面试岗位 <input id="f-position" placeholder="如：后端工程师"></label>
     <label>面试地点 <input id="f-location" placeholder="如：北京·海淀 / 线上"></label>
     <label>面试时间 <input id="f-at" type="datetime-local"></label>
     <label>期望薪资 <input id="f-salary" placeholder="如：25-30K×14"></label>
-    <label>时长 <input id="f-duration" placeholder="58 / 1小时30分" inputmode="text">
-      <span class="hint" id="duration-hint">支持 58、58分钟、1h30m、1.5小时</span>
+    <label>时长 <input id="f-duration" placeholder="58 / 58分钟 / 1h30m" inputmode="text">
+      <span class="hint" id="duration-hint"></span>
     </label>
     <label>面试类型
       <select id="f-type">
         {% for k, v in interview_types.items() %}<option value="{{ k }}" {{ 'selected' if k == 'technical' else '' }}>{{ v }}</option>{% endfor %}
       </select>
     </label>
-    <label class="span2">面试标题 <span class="muted small">（留空自动生成，可手动修改）</span>
+    <label class="span2">面试标题
       <span class="row-inline">
         <input id="f-title" placeholder="留空则按「公司-岗位-时间」自动生成">
-        <button class="btn small" type="button" id="btn-title">按规则重算</button>
+        <button class="btn small" type="button" id="btn-title">重新生成</button>
       </span>
     </label>
   </div>
 </section>
 
 <section class="card">
-  <h2>② 转写文本与说话人角色</h2>
-  <p class="muted small">支持常见说话人标签：<code>[面试官] …</code>、<code>面试官：…</code>、<code>A：…</code>、<code>Speaker 0：…</code>。
-    无标签文本会按段落切分并由系统推断角色（可逐段修正）。</p>
-  <textarea id="f-text" rows="12" placeholder="粘贴面试录音的转写文本（可含说话人标签）……"></textarea>
+  <h2>② 转写文本</h2>
+  <p class="card-sub">粘贴后自动识别说话人与格式，你只需核对下方角色。</p>
+  <details class="help">
+    <summary>支持哪些说话人标签格式？</summary>
+    <div class="help-body">
+      <p>带标签的写法（角色直接读标签，不会猜）：</p>
+      <p><code>[面试官] …</code>　<code>面试官：…</code>　<code>A：…</code>　<code>Speaker 0：…</code></p>
+      <p>没有标签的文本会按段落切分，由系统推断角色并逐段给出置信度，你可以逐段改。</p>
+    </div>
+  </details>
+  <textarea id="f-text" class="input-transcript" rows="12" placeholder="粘贴面试录音的转写文本（可含说话人标签，也可直接粘贴无标签的整段文本）……"></textarea>
   <div class="row">
     <button class="btn" id="btn-sample">载入示例文本</button>
-    <button class="btn" id="btn-analyze">重新识别说话人与格式</button>
-    <span class="muted small" id="analyze-info">粘贴文本后会自动识别说话人（无需手动点击）</span>
+    <button class="btn" id="btn-analyze">重新识别</button>
+    <span class="meta" id="analyze-info"></span>
   </div>
 
   <div id="analyze-skeleton" hidden>
@@ -59,16 +66,17 @@
   </div>
 
   <div id="analyze-result" hidden>
-    <h3>说话人角色确认 <span class="muted small">（系统不猜测——请核对后创建，R1）</span></h3>
-    <p id="fmt-line" class="muted small"></p>
+    <h3>确认说话人角色</h3>
+    <p class="card-sub">角色决定哪些段落算问题、哪些算回答；核对后即可创建。</p>
+    <p id="fmt-line" class="meta"></p>
     <table class="tbl" id="speaker-table">
       <caption class="sr-only">识别到的说话人与其角色</caption>
       <thead><tr><th>说话人</th><th>来源</th><th>置信度</th><th>角色</th><th>内容片段</th></tr></thead>
       <tbody></tbody>
     </table>
     <div class="row">
-      <button class="btn primary big" id="btn-create">创建并解析 →</button>
-      <span class="muted small" id="create-info"></span>
+      <button class="btn primary big" id="btn-create">创建并解析</button>
+      <span class="meta" id="create-info"></span>
     </div>
   </div>
 </section>
@@ -109,14 +117,14 @@ $('btn-title').addEventListener('click', async () => {
 });
 $('f-title').addEventListener('input', () => { $('f-title').dataset.auto = '0'; });
 
-// 时长输入即时提示（不阻断）
+// 时长输入即时校验（正常时不占位，只有无法识别才提示）
 $('f-duration').addEventListener('input', () => {
   const v = $('f-duration').value.trim();
   const hint = $('duration-hint');
-  if (!v) { hint.textContent = '支持 58、58分钟、1h30m、1.5小时'; hint.classList.remove('warn-text'); return; }
   const ok = /^\d+(\.\d+)?$/.test(v) || /^(?:(\d+(\.\d+)?)(小时|个小时|h|hr|hrs|hour|hours))?(?:(\d+(\.\d+)?)(分钟|分|min|mins|minute|minutes|m))?$/i.test(v.replace(/\s/g,''));
-  hint.textContent = ok ? '将保存为分钟数' : '暂无法识别，创建后会按"未知时长"处理（不阻断导入）';
-  hint.classList.toggle('warn-text', !ok);
+  const bad = Boolean(v) && !ok;
+  hint.textContent = bad ? '无法识别时长，将按「未知」保存，不影响导入' : '';
+  hint.classList.toggle('warn-text', bad);
 });
 
 $('btn-sample').addEventListener('click', async () => {
@@ -143,7 +151,7 @@ async function analyzeText() {
     speakers = data.speakers || [];
     $('analyze-result').hidden = false;
     $('analyze-info').textContent = '';
-    $('fmt-line').textContent = `文本格式：${data.format_label}（${data.chars} 字符，${data.turns} 个发言段）；当前解析器：${data.extractor_label}`;
+    $('fmt-line').textContent = `${data.format_label} · ${data.chars} 字符 · ${data.turns} 个发言段 · 解析器 ${data.extractor_label}`;
     if (data.duplicate) {
       ui.toast(`已存在相同原文的面试《${data.duplicate.title}》，创建时会再次确认`, { type: 'error' });
     }
@@ -159,11 +167,11 @@ async function analyzeText() {
         <td><span class="chip">${sp.source === 'label' ? '标签直读' : '内容推断'}</span></td>
         <td>${Math.round((sp.confidence || 0) * 100)}%</td>
         <td><select class="role-sel" aria-label="角色">${roleSel}</select></td>
-        <td class="muted small">${sp.sample || ''}</td>`;
+        <td class="meta">${sp.sample || ''}</td>`;
       tbody.appendChild(tr);
     }
     if (data.format === 'none') {
-      $('fmt-line').textContent += ' ｜ 无标签文本：角色为低置信推断，请核对（配置 API Key 后可由 AI 推断）。';
+      $('fmt-line').textContent += ' ｜ 无标签文本，角色为低置信推断，请重点核对。';
     }
   } catch (e) {
     ui.toast('网络错误：' + e.message, { type: 'error' });
@@ -176,7 +184,7 @@ async function analyzeText() {
 
 function scheduleAnalyze(delay) {
   clearTimeout(analyzeTimer);
-  $('analyze-info').textContent = '文本已更新，稍后自动识别…';
+  $('analyze-info').textContent = '识别中…';
   analyzeTimer = setTimeout(analyzeText, delay === undefined ? 700 : delay);
 }
 

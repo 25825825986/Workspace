@@ -55,13 +55,17 @@
       <a href="/settings" class="{{ 'active' if request.endpoint == 'page_settings' else '' }}">设置</a>
     </nav>
     <div class="topbar-right">
+      {# 面试记录页自带搜索框与「搜索 ⌘K」按钮，顶栏不再重复放一个 #}
+      {% if request.endpoint != 'page_index' %}
       <button class="btn small" type="button" id="palette-open" aria-haspopup="dialog"
               title="搜索面试记录与知识点（⌘K / Ctrl+K）">
         <span aria-hidden="true">⌘K</span><span class="sr-only">打开全局搜索</span>
       </button>
+      {% endif %}
       <button class="btn small" id="theme-toggle" type="button"
               title="在浅色 / 深色之间快速切换（也可在设置页选择跟随系统）">切换主题</button>
-      <span class="mode-badge {{ mode_badge.kind }}" title="当前解析模式（可在设置页切换）">{{ mode_badge.text }}</span>
+      <span class="mode-badge {{ mode_badge.kind }}"
+            title="{{ mode_badge.title or '当前解析模式（可在设置页切换）' }}">{{ mode_badge.text }}</span>
     </div>
   </div>
 </header>
@@ -74,7 +78,7 @@
 <main class="wrap" id="main">
 {% block content %}{% endblock %}
 </main>
-<footer class="wrap foot">AI_Review · v{{ app_version }} · 本地运行 · 数据保存在项目 data/ 目录</footer>
+<footer class="wrap foot">AI_Review v{{ app_version }}　数据都在本机 <code>data/</code> 目录，备份就是复制它</footer>
 
 <nav class="tabbar" aria-label="移动端导航">
   <a href="/" class="{{ 'active' if request.endpoint == 'page_index' else '' }}">记录</a>

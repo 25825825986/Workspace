@@ -478,6 +478,14 @@ check("无障碍基座：aria-live / skip-link / focus-visible / reduced-motion"
       and ":focus-visible" in css and "prefers-reduced-motion" in css)
 check("底部 Tab / 浮动菜单 / 暗色 on-brand token",
       ".tabbar" in css and "--on-brand" in css and "data-popover" in css)
+# 样式表完整性：类选择器一旦被批量破坏（例如误做全局字符替换），
+# 上面的抽查可能靠个别子串侥幸通过，这里再做一次结构性断言。
+_css_class_lines = [ln for ln in css.split("\n") if ln.startswith(".")]
+check("样式表结构完整（类选择器与三层面色 token 都在）",
+      len(_css_class_lines) >= 150 and css.count("--paper:") == 2
+      and css.count("--margin:") == 2 and css.count("--desk:") == 2
+      and "{" in css and css.count("{") == css.count("}"),
+      f"类选择器行={len(_css_class_lines)} 花括号={{:{css.count('{')} }}:{css.count('}')}")
 
 # 14) 模型 API 配置健壮性（base_url 规范化与诊断提示，离线可测）
 cases = [

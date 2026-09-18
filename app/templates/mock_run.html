@@ -9,7 +9,9 @@
 .q-card{position:relative}
 .q-text{font-size:20px;line-height:1.7;margin:6px 0 12px;font-weight:600}
 .q-tools{display:flex;gap:var(--sp-2);align-items:center;flex-wrap:wrap;margin-bottom:var(--sp-3)}
-.answer-box{width:100%;min-height:170px;font-family:var(--font);font-size:15px;line-height:1.7}
+.answer-box{width:100%;min-height:200px;font-family:var(--serif);font-weight:500;
+  font-size:var(--fs-read);line-height:var(--lh-read);background:var(--paper);
+  max-width:var(--maxw-read)}
 .marks{display:flex;gap:var(--sp-2);flex-wrap:wrap;margin-top:var(--sp-2)}
 .mark-btn.active{border-color:var(--brand);background:var(--brand-soft);color:var(--brand)}
 .nav-strip{display:flex;gap:6px;flex-wrap:wrap;margin-top:var(--sp-3)}
@@ -28,7 +30,7 @@
   <div class="run-head">
     <div>
       <h2>{{ session.title }}</h2>
-      <p class="muted small">
+      <p class="meta">
         模式：{{ {'whole': '整场复盘', 'bank': '题库随机', 'resume': '简历+AI'}.get(session.mode, session.mode) }}
         ｜ 进度 {{ answered }} / {{ turns|length }} 题
         {% if session.config.get('tts') %}｜ 语音：{{ {'web': '浏览器语音', 'none': '静音', 'edge': '服务端 edge-tts'}.get(session.config.tts, session.config.tts) }}{% endif %}
@@ -38,7 +40,7 @@
     </div>
     <div class="ops">
       <span class="timer" id="timer" aria-live="off">00:00</span>
-      <span class="muted small" id="save-state">未修改</span>
+      <span class="meta" id="save-state">未修改</span>
       <button class="btn" id="btn-finish" data-finish="1">结束并生成报告</button>
     </div>
   </div>
@@ -62,7 +64,7 @@
   <p class="q-text">{{ current.question_text }}</p>
 
   <details class="fixer">
-    <summary>参考要点（默认可不看；来自知识库沉淀）</summary>
+    <summary>参考要点</summary>
     {% if current.reference_answer %}
     <p class="tagline">忠实原文参考（历史作答）</p>
     <p class="verbatim">{{ current.reference_answer }}</p>
@@ -72,21 +74,21 @@
     <p class="small">{{ current.reference_tips }}</p>
     {% endif %}
     {% if not current.reference_answer and not current.reference_tips %}
-    <p class="muted small">该题暂无参考要点（AI 生成题或未沉淀的题库题）。</p>
+    <p class="meta">该题暂无参考要点。</p>
     {% endif %}
     {% if current.reference_entry_id %}
-    <p class="small"><a href="/knowledge/compare/{{ current.reference_entry_id }}">查看知识库该考点的全部作答对比 →</a></p>
+    <p class="small"><a href="/knowledge/compare/{{ current.reference_entry_id }}">查看该考点的全部作答对比</a></p>
     {% endif %}
   </details>
 
-  <label>我的回答（口头作答的要点记录）
+  <label>我的回答
     <textarea class="answer-box" id="answer" placeholder="口述后把要点记下来，方便复盘时对照参考要点……">{{ current.my_answer or '' }}</textarea>
   </label>
   <div class="marks">
     <button class="btn small mark-btn {{ 'active' if current.mark == 'good' else '' }}" data-mark="good">掌握</button>
     <button class="btn small mark-btn {{ 'active' if current.mark == 'unsure' else '' }}" data-mark="unsure">不确定</button>
     <button class="btn small mark-btn {{ 'active' if current.mark == 'blank' else '' }}" data-mark="blank">不会</button>
-    <span class="muted small" id="save-info">Ctrl/⌘ + Enter 保存并进入下一题</span>
+    <span class="meta" id="save-info">Ctrl/⌘ + Enter 保存并进入下一题</span>
   </div>
   <div class="row">
     {% if idx > 0 %}<a class="btn" href="/mock/{{ session.id }}?i={{ idx }}">← 上一题</a>{% endif %}
